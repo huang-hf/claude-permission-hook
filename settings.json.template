@@ -1,0 +1,34 @@
+{
+  "_comment": "Copy the relevant parts into your ~/.claude/settings.json. Replace all <PLACEHOLDER> values. NEVER commit your real settings.json.",
+
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "<YOUR_ANTHROPIC_TOKEN>",
+    "ANTHROPIC_BASE_URL": "<YOUR_ANTHROPIC_BASE_URL_OR_https://api.anthropic.com>",
+    "_comment_env_opts": "Optional: SECURE_HANDLER_AI_API=openai (OpenAI-compatible gateway), SECURE_HANDLER_AI_MODEL=<model>, SECURE_HANDLER_INSECURE_TLS=1 (only for local MITM proxy; verification is ON by default)"
+  },
+
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<PYTHON_WITH_DIPPY> ~/.claude/hooks/secure_handler.py"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Read|Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<PYTHON_WITH_DIPPY> ~/.claude/hooks/secure_handler.py"
+          }
+        ]
+      }
+    ]
+  }
+}

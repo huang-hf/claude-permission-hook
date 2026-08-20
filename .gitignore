@@ -1,0 +1,17 @@
+# Never commit real secrets or personal data
+settings.json
+settings.local.json
+*.local.json
+
+# Audit log = full shell command history (highly sensitive)
+logs/
+permission_audit.jsonl
+*.jsonl
+
+# Backups & Python caches
+*.bak
+__pycache__/
+*.pyc
+
+# Local working context for agent handoff — describes the personal live env, not for publishing
+HANDOFF.md
