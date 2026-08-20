@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
 """
 secure_handler.py
-PreToolUse Hook — Dippy AST 解析 + AI 兜底 + 审计日志
+PreToolUse Hook — dippy AST analysis + AI fallback + audit log
 
-处理流程：
-1. Write/Edit/NotebookEdit：cwd 内路径直接放行
-2. Bash：Dippy AST 解析
-   - allow  → 审计 + 放行
-   - ask / deny → AI 兜底
-       SAFE   → 审计 + 放行
-       UNSAFE → 审计 + ask（返回拒绝原因，引导 Claude 修正）
-3. 任何异常 → 静默退出（fail-safe，交弹窗处理）
+Flow:
+1. Write/Edit/NotebookEdit: allow paths inside cwd
+2. Bash: dippy AST analysis
+   - allow  → audit + allow
+   - ask / deny → AI fallback
+       SAFE   → audit + allow
+       UNSAFE → audit + ask (returns the rejection reason to steer Claude)
+3. Any error → silent exit (fail-safe, falls through to the normal prompt)
 
-开关控制：
-  环境变量 SECURE_HANDLER_AI_FALLBACK=0  禁用 AI 兜底
-           SECURE_HANDLER_AI_FALLBACK=1  启用（默认）
-           SECURE_HANDLER_AI_API=anthropic|openai   AI 兜底 API 格式（默认 anthropic）
-           SECURE_HANDLER_AI_MODEL=<model>          兜底模型名（默认 claude-haiku-4-5-20251001）
-           SECURE_HANDLER_INSECURE_TLS=1            本地 MITM 代理场景跳过证书验证（默认验证）
+Switches (env vars):
+  SECURE_HANDLER_AI_FALLBACK=0  disable the AI fallback
+  SECURE_HANDLER_AI_FALLBACK=1  enable (default)
+  SECURE_HANDLER_AI_API=anthropic|openai  AI fallback API format (default: anthropic)
+  SECURE_HANDLER_AI_MODEL=<model>         fallback model name (default: claude-haiku-4-5-20251001)
+  SECURE_HANDLER_INSECURE_TLS=1           skip cert verification for local MITM proxies (default: verify)
 
-审计日志：~/.claude/logs/permission_audit.jsonl
-  字段：ts / cmd / tool / decision / layer / ai / reason
+Audit log: ~/.claude/logs/permission_audit.jsonl
+  Fields: ts / cmd / tool / decision / layer / ai / reason
 """
 
 from __future__ import annotations
@@ -34,22 +34,22 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-# 默认验证证书；本地 MITM 代理场景可设 SECURE_HANDLER_INSECURE_TLS=1 跳过验证
+# Verify certificates by default; set SECURE_HANDLER_INSECURE_TLS=1 to skip (local MITM proxies)
 _SSL_CTX = ssl.create_default_context()
 if os.getenv('SECURE_HANDLER_INSECURE_TLS') == '1':
     _SSL_CTX.check_hostname = False
     _SSL_CTX.verify_mode = ssl.CERT_NONE
 
-# ── 开关 ──────────────────────────────────────────────────────────
+# ── Switches ───────────────────────────────────────────────────────
 AI_FALLBACK_ENABLED: bool = os.getenv('SECURE_HANDLER_AI_FALLBACK', '1') != '0'
 AI_API_STYLE: str = os.getenv('SECURE_HANDLER_AI_API', 'anthropic').strip().lower()  # anthropic | openai
-AI_FALLBACK_MODEL = os.getenv('SECURE_HANDLER_AI_MODEL', 'claude-haiku-4-5-20251001')  # 轻量快速
+AI_FALLBACK_MODEL = os.getenv('SECURE_HANDLER_AI_MODEL', 'claude-haiku-4-5-20251001')  # lightweight & fast
 AI_FALLBACK_TIMEOUT = 15
 AUDIT_LOG_PATH = Path.home() / '.claude' / 'logs' / 'permission_audit.jsonl'
 
 
 # ══════════════════════════════════════════════════════════════════
-# 审计日志
+# Audit log
 # ══════════════════════════════════════════════════════════════════
 
 def write_audit(cmd: str, tool: str, decision: str, layer: str,
@@ -74,7 +74,7 @@ def write_audit(cmd: str, tool: str, decision: str, layer: str,
 
 
 # ══════════════════════════════════════════════════════════════════
-# 响应构造（PreToolUse 格式）
+# Response helpers (PreToolUse format)
 # ══════════════════════════════════════════════════════════════════
 
 def _pre_tool_response(decision: str, reason: str) -> dict:
@@ -96,22 +96,22 @@ def ask_response(reason: str = '') -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════
-# AI 兜底
+# AI fallback
 # ══════════════════════════════════════════════════════════════════
 
-AI_PROMPT = """你是开发者 AI 编程助手的安全审查员。
+AI_PROMPT = """You are a security reviewer for an AI coding assistant.
 
-判断以下 Bash 命令是否可以自动放行：
-命令：{command}
-项目目录：{cwd}
+Decide whether the following Bash command can be auto-approved:
+Command: {command}
+Project dir: {cwd}
 
-安全（SAFE）：读取文件、列目录、构建工具（pnpm/npm/yarn/make）、
-  git 操作、开发工具（tsc/tsx/python/pytest/docker build）、
-  查看日志、包管理器安装、项目目录内文件操作等常规开发操作。
-不安全（UNSAFE）：删除文件/目录、修改项目外文件、访问凭证、
-  网络数据外泄、不可逆系统级变更。
+SAFE: reading files, listing directories, build tools (pnpm/npm/yarn/make),
+  git operations, dev tools (tsc/tsx/python/pytest/docker build),
+  viewing logs, package manager installs, file operations inside the project dir.
+UNSAFE: deleting files/directories, modifying files outside the project,
+  accessing credentials, network data exfiltration, irreversible system-level changes.
 
-只回复 SAFE 或 UNSAFE，不要其他内容。"""
+Reply with only SAFE or UNSAFE, nothing else."""
 
 
 def ask_ai(command: str, cwd: str = '') -> tuple[bool, str]:
@@ -120,7 +120,7 @@ def ask_ai(command: str, cwd: str = '') -> tuple[bool, str]:
     if not auth_token:
         return False, 'no_token'
 
-    content = AI_PROMPT.format(command=command, cwd=cwd or '未知')
+    content = AI_PROMPT.format(command=command, cwd=cwd or 'unknown')
     headers = {
         'Content-Type': 'application/json',
         'Authorization': f'Bearer {auth_token}',
@@ -156,14 +156,14 @@ def ask_ai(command: str, cwd: str = '') -> tuple[bool, str]:
 
 
 # ══════════════════════════════════════════════════════════════════
-# Dippy AST 分析
+# dippy AST analysis
 # ══════════════════════════════════════════════════════════════════
 
 def dippy_analyze(command: str, cwd: str) -> tuple[str, str]:
     """
-    调用 Dippy analyzer，返回 (action, reason)。
+    Run the dippy analyzer, returns (action, reason).
     action: 'allow' | 'ask' | 'deny'
-    导入失败时返回 ('ask', 'dippy_unavailable') 交 AI 兜底。
+    On import failure returns ('ask', 'dippy_unavailable') → AI fallback.
     """
     try:
         from dippy.core.analyzer import analyze
@@ -177,11 +177,11 @@ def dippy_analyze(command: str, cwd: str) -> tuple[str, str]:
 
 
 # ══════════════════════════════════════════════════════════════════
-# git 元数据放行（worktree 的 .git/.../sdd 等协作产物）
+# git metadata allow (worktree coordination files under .git/...)
 # ══════════════════════════════════════════════════════════════════
 
 def _resolve_path(file_path: str, cwd: str) -> str:
-    """把 file_path 解析为绝对路径；相对路径按 JSON 的 cwd(而非钩子进程 cwd)解析。"""
+    """Resolve file_path to an absolute path; relative paths use the JSON cwd (not the hook process cwd)."""
     if not file_path:
         return ''
     p = Path(file_path)
@@ -194,7 +194,7 @@ def _resolve_path(file_path: str, cwd: str) -> str:
 
 
 def _git_common_dir(cwd: str) -> str | None:
-    """当前 cwd 所属仓库的主 .git 目录(绝对路径)；非 git 返回 None。"""
+    """Absolute path of the repo's main .git dir for cwd; None if not a git repo."""
     if not cwd:
         return None
     try:
@@ -208,7 +208,7 @@ def _git_common_dir(cwd: str) -> str | None:
 
 
 def _is_git_metadata(fp_resolved: str, common_dir: str | None) -> bool:
-    """文件是否落在当前仓库的 .git 目录内(排除 hooks/ 与 config 危险面)。"""
+    """Whether the resolved file is inside the repo's .git dir (excluding hooks/ and config danger surfaces)."""
     if not common_dir or not fp_resolved:
         return False
     if not (fp_resolved == common_dir or fp_resolved.startswith(common_dir + os.sep)):
@@ -216,14 +216,14 @@ def _is_git_metadata(fp_resolved: str, common_dir: str | None) -> bool:
     rel = fp_resolved[len(common_dir):].lstrip(os.sep)
     parts = rel.split(os.sep)
     if 'hooks' in parts:
-        return False   # 任意层级的 .git/.../hooks/ 仍弹窗（可塞可执行钩子）
+        return False   # any .git/.../hooks/ path still prompts (can hold executable hooks)
     if os.path.basename(rel) in ('config', 'config.worktree'):
-        return False   # git 配置文件仍弹窗（可改 hooksPath 等）
+        return False   # git config files still prompt (can change hooksPath etc.)
     return True
 
 
 # ══════════════════════════════════════════════════════════════════
-# 主流程
+# Main flow
 # ══════════════════════════════════════════════════════════════════
 
 def main():
@@ -239,7 +239,7 @@ def main():
         tool = data.get('tool_name', '')
         cwd = data.get('cwd', '')
 
-        # ── Write / Edit / NotebookEdit：cwd 内路径直接放行 ──────
+        # ── Write / Edit / NotebookEdit: allow paths inside cwd ──
         if tool in ('Read', 'Write', 'Edit', 'NotebookEdit'):
             file_path = data.get('tool_input', {}).get('file_path', '')
             fp_res = _resolve_path(file_path, cwd)
@@ -261,7 +261,7 @@ def main():
         if not command:
             sys.exit(0)
 
-        # ── 第一层：Dippy AST 解析 ────────────────────────────────
+        # ── Layer 1: dippy AST analysis ────────────────────────────
         action, reason = dippy_analyze(command, cwd)
 
         if action == 'allow':
@@ -269,7 +269,7 @@ def main():
             print(json.dumps(allow_response(reason)))
             sys.exit(0)
 
-        # ── 第二层：AI 兜底（Dippy 说 ask / deny）───────────────
+        # ── Layer 2: AI fallback (dippy said ask / deny) ───────────
         if AI_FALLBACK_ENABLED:
             is_safe, ai_raw = ask_ai(command, cwd)
             if is_safe:
@@ -281,7 +281,7 @@ def main():
                 print(json.dumps(ask_response(reason)))
                 sys.exit(0)
 
-        # ── 兜底：退回弹窗 ────────────────────────────────────────
+        # ── Fallback: back to the normal prompt ────────────────────
         write_audit(command, tool, 'ask', 'fallthrough', reason)
         sys.exit(0)
 
