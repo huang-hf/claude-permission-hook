@@ -125,9 +125,20 @@ Reply with only SAFE or UNSAFE, nothing else."""
 
 
 def _ai_endpoint() -> tuple[str, str]:
-    """(base_url, token)。优先用 hook 专属变量,回落到 ANTHROPIC_* 以兼容既有安装。"""
-    base = (os.getenv('SECURE_HANDLER_AI_BASE_URL')
-            or os.getenv('ANTHROPIC_BASE_URL')
+    """(base_url, token)。优先用 hook 专属变量,回落到 ANTHROPIC_* 以兼容既有安装。
+
+    两者**成对**回落,不各自独立:一旦设了 SECURE_HANDLER_AI_BASE_URL,token 就
+    只认 SECURE_HANDLER_AI_KEY,不再回落到 ANTHROPIC_AUTH_TOKEN。
+
+    独立回落时,「设了专属 URL 却忘了设专属 KEY」会把 Anthropic 的 token 发给
+    那个第三方端点 —— 而这正是本函数存在的场景下最可能的误配置。想用 Anthropic
+    的 token 配自建代理仍然可以,把两个变量都显式设上即可:那是一次明确的选择,
+    而不是一次意外。
+    """
+    sh_base = os.getenv('SECURE_HANDLER_AI_BASE_URL')
+    if sh_base:
+        return sh_base.rstrip('/'), (os.getenv('SECURE_HANDLER_AI_KEY') or '')
+    base = (os.getenv('ANTHROPIC_BASE_URL')
             or 'https://api.anthropic.com').rstrip('/')
     token = (os.getenv('SECURE_HANDLER_AI_KEY')
              or os.getenv('ANTHROPIC_AUTH_TOKEN') or '')
