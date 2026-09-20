@@ -571,16 +571,29 @@ def main():
         if req is None:
             sys.exit(0)
 
-        verdict = judge(req)
+        hook_event = data.get('hook_event_name') if isinstance(data, dict) else None
+        if req.kind == 'command' and hook_event == 'PreToolUse':
+            # PreToolUse 对每次工具调用都触发(PermissionRequest 只在 Claude Code
+            # 判定"需要权限决策"时才触发),所以这是红线唯一能覆盖到「被 allow
+            # 规则放行的命令」的地方。这里只跑本地正则:完整判断链
+            # (dippy/AI/typesafe)留在 PermissionRequest,避免给本已放行的命令
+            # 平白增加子进程与网络开销。未命中必须 no_opinion(静默),绝不能
+            # 输出 ask —— 否则会覆盖 owner 的 allow 规则。
+            if hit := check_redlines(req):
+                verdict = Verdict('ask', hit, 'redline')
+            else:
+                verdict = Verdict('no_opinion', 'redline_pass', 'rule')
+        else:
+            verdict = judge(req)
 
         tool = data.get('tool_name', '')
         write_audit(req.payload, tool, verdict.decision, verdict.layer,
                     verdict.reason, verdict.ai,
                     backend=verdict.backend, scores=verdict.scores,
                     elapsed_ms=verdict.elapsed_ms,
-                    hook_event=data.get('hook_event_name') if isinstance(data, dict) else None)
+                    hook_event=hook_event)
 
-        out = emit(verdict, data.get('hook_event_name', 'PreToolUse') if isinstance(data, dict) else 'PreToolUse')
+        out = emit(verdict, hook_event if hook_event is not None else 'PreToolUse')
         if out:
             print(out)
         sys.exit(0)
