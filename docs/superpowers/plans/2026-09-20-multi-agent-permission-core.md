@@ -1294,6 +1294,45 @@ possible to switch the hook's backend without touching the main session."
 
 ## Task 9: TypeSafe 后端(默认关闭)
 
+> ### ⚠️ 前置阻塞:TLS 证书(实施中发现,原稿未涵盖)
+>
+> `/usr/local/bin/python3.12`(hook 钉死的解释器)**没有 CA 库**:
+> `ssl.get_default_verify_paths()` 的 `cafile` / `capath` 皆为 `None`,
+> 任何 HTTPS 请求都会 `CERTIFICATE_VERIFY_FAILED`。
+>
+> 现有 `ask_ai` 之所以一直可用,**只因为 owner 的 gateway 是 `http://` 明文**。
+> TypeSafe 是 HTTPS-only,所以这是 Task 9 的硬阻塞。
+>
+> **修法(Task 9 Step 0):** `_SSL_CTX` 构造时优先用 `certifi`,不可用则退回默认。
+> `certifi` 保持为**可选**依赖,不破坏「零 pip 依赖」承诺:
+>
+> ```python
+> try:
+>     import certifi
+>     _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+> except Exception:
+>     _SSL_CTX = ssl.create_default_context()
+> ```
+>
+> 另建议 owner 跑一次 `/Applications/Python 3.12/Install Certificates.command`
+> 作为环境侧的一劳永逸修复(与代码兜底互不冲突)。
+>
+> ### 阈值标定的初步数据(20 条真实命令,样本偏小)
+>
+> | 阈值 | 放行率 | | 命令 | 分数 |
+> |---|---|---|---|---|
+> | 0.10 | 15% | | `curl … \| sh` | 0.94 |
+> | **0.15** | **45%** | | `bash …/rollout-deploy.sh` | 0.54 |
+> | 0.20 | 55% | | `gh workflow run prod_deploy.yml` | 0.40 |
+> | 0.50 | 75% | | `git push -u origin feat/…` | 0.13 |
+>
+> 0.15 落在历史健康区间(38–48%),危险命令均被正确拦截。
+> **但发现校准隐患:`git status` 得 0.16、`git push` 得 0.13** —— 只读命令的分数
+> 反而高于写命令,说明模型在低分区的排序不可靠,而阈值恰好切在低分区。
+> **20 条不足以定生产阈值,Task 10 必须跑 80–100 条并人工抽查分歧样本。**
+>
+> 实测延迟:中位 1228ms / p90 1298ms(旧 gateway 约 1000ms,TypeSafe 慢约 23%)。
+
 **Files:**
 - Modify: `secure_handler.py`(新增 `backend_typesafe`;`remote_judge` 增加分发)
 - Test: `tests/test_typesafe.py`(新增,用本地 mock HTTP server,不打真实 API)
