@@ -15,6 +15,18 @@
 - **零 pip 依赖**:实现代码只用标准库。`dippy` 是可选运行时依赖,导入失败必须降级而非崩溃。
 - **单文件**:所有实现代码留在 `secure_handler.py` 内,不拆包(owner 选定方案 A)。
 - **fail-safe 不变量**:任何异常 / 超时 / 畸形响应 → `ask` 或静默,**永不 `allow`**。
+- **`fallthrough` 分支必须返回 `no_opinion`,不可返回 `ask`**(plan 原稿在三处写错,Task 3 实施时发现):
+
+  `emit_claude_code()` 只看 `decision` 决定是否静默。若 `fallthrough` 返回 `Verdict('ask', ...)`,
+  hook 会**主动打印 `ask`**,从而**覆盖用户的 allow 规则、强制弹窗** —— 正是 spec §8 里警告过的
+  那个「让弹窗变多」的失败模式。
+
+  重构前 `main()` 在该分支是 `write_audit(..., 'ask', 'fallthrough', ...)` + `sys.exit(0)`,
+  **只写审计、不 print**。正确写法是 `Verdict('no_opinion', reason, 'fallthrough')`:stdout 静默,
+  而 `main()` 的临时映射(Task 6 之前)会把 `no_opinion` 记回审计的 `'ask'`,与基线逐字节一致。
+
+  **Task 9 重写 `remote_judge()` 时同样适用** —— `backend == 'off'` 与 AI 兜底关闭两个分支都必须用
+  `no_opinion`。
 - **降级只因「错误」,不因「否定」**:后端判危 → 直接 ask,不再询问下一个后端。
 - **阶段一零行为变更**:Task 1–4 完成后,对任意输入的 stdout 与审计条目必须与重构前逐字节一致(时间戳除外)。
 
@@ -542,7 +554,7 @@ def remote_judge(req: Request) -> Verdict:
     if AI_FALLBACK_ENABLED:
         is_safe, ai_raw = ask_ai(req.payload, req.cwd)
         return Verdict('allow' if is_safe else 'ask', reason, 'ai', ai_raw)
-    return Verdict('ask', reason, 'fallthrough')
+    return Verdict('no_opinion', reason, 'fallthrough')
 
 
 def judge(req: Request) -> Verdict:
@@ -1457,7 +1469,7 @@ def remote_judge(req: Request) -> Verdict:
 
     backend = os.getenv('SECURE_HANDLER_BACKEND', 'anthropic').strip().lower()
     if backend == 'off':
-        return Verdict('ask', reason, 'fallthrough')
+        return Verdict('no_opinion', reason, 'fallthrough')
 
     if backend == 'typesafe':
         v = backend_typesafe(req)
@@ -1471,7 +1483,7 @@ def remote_judge(req: Request) -> Verdict:
     if AI_FALLBACK_ENABLED:
         is_safe, ai_raw = ask_ai(req.payload, req.cwd)   # 主后端:沿用 15s
         return Verdict('allow' if is_safe else 'ask', reason, 'ai', ai_raw)
-    return Verdict('ask', reason, 'fallthrough')
+    return Verdict('no_opinion', reason, 'fallthrough')
 ```
 
 - [ ] **Step 6: 运行全部测试**
