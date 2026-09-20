@@ -124,9 +124,18 @@ UNSAFE: deleting files/directories, modifying files outside the project,
 Reply with only SAFE or UNSAFE, nothing else."""
 
 
+def _ai_endpoint() -> tuple[str, str]:
+    """(base_url, token)。优先用 hook 专属变量,回落到 ANTHROPIC_* 以兼容既有安装。"""
+    base = (os.getenv('SECURE_HANDLER_AI_BASE_URL')
+            or os.getenv('ANTHROPIC_BASE_URL')
+            or 'https://api.anthropic.com').rstrip('/')
+    token = (os.getenv('SECURE_HANDLER_AI_KEY')
+             or os.getenv('ANTHROPIC_AUTH_TOKEN') or '')
+    return base, token
+
+
 def ask_ai(command: str, cwd: str = '') -> tuple[bool, str]:
-    base_url = os.getenv('ANTHROPIC_BASE_URL', 'https://api.anthropic.com').rstrip('/')
-    auth_token = os.getenv('ANTHROPIC_AUTH_TOKEN', '')
+    base_url, auth_token = _ai_endpoint()
     if not auth_token:
         return False, 'no_token'
 
