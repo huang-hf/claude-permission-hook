@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import ssl
 import subprocess
 import sys
@@ -243,6 +244,32 @@ Verdict = namedtuple('Verdict', 'decision reason layer ai', defaults=(None,))
 
 
 # ══════════════════════════════════════════════════════════════════
+# CORE — red lines (always ask; never auto-approved by any backend)
+# ══════════════════════════════════════════════════════════════════
+
+_REDLINES = {
+    'prod_infra': re.compile(
+        r'\bkubectl\b.*\b(apply|delete|exec|patch|edit|scale|rollout|replace|cp|'
+        r'drain|cordon|label|annotate|set|run|taint|debug|proxy|port-forward)\b', re.I),
+    'credentials': re.compile(
+        r'\bcoffer\b|/\.ssh/|/\.aws/|~/\.ssh|'
+        r'\b(secret|secretsmanager|credential|private[_-]?key|password|token)\b', re.I),
+    'destructive': re.compile(
+        r'\brm\s+-[rf]|\bgit\s+push\b.*--force|--force\b.*\bgit\s+push|'
+        r'\bdrop\s+(table|database)\b|\btruncate\b|\bdd\s+if=|\bmkfs\b', re.I),
+}
+
+
+def check_redlines(req: Request) -> str | None:
+    """命中返回类别名,否则 None。刻意做宽:误报只多弹一次窗,漏报可能放行危险命令。"""
+    text = req.payload or ''
+    for name, rx in _REDLINES.items():
+        if rx.search(text):
+            return name
+    return None
+
+
+# ══════════════════════════════════════════════════════════════════
 # CORE — decision chain
 # ══════════════════════════════════════════════════════════════════
 
@@ -275,6 +302,13 @@ def remote_judge(req: Request) -> Verdict:
 
 def judge(req: Request) -> Verdict:
     """唯一判断出口。纯函数:不打印、不写日志。"""
+    if hit := check_redlines(req):
+        return Verdict('ask', hit, 'redline')
+    if not req.payload:
+        # 空 payload 无法有意义地判断,且不应为此付出 dippy 子进程开销。
+        # main() 实际走不到这里(parse_claude_code 对空命令返回 None),
+        # 这条只是让 judge() 本身对空输入保持防御性、可单测。
+        return Verdict('no_opinion', 'empty payload', 'rule')
     if v := local_rules(req):
         return v
     if req.kind in ('file_read', 'file_write'):
