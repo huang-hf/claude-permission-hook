@@ -300,6 +300,15 @@ _REDLINES = {
     'credentials': re.compile(
         r'\bcoffer\b|/\.(ssh|aws|kube|gnupg)(/|$)|~/\.(ssh|aws|kube|gnupg)(/|$)|'
         r'/\.netrc\b|/\.docker/config\.json|\bid_rsa\b|\.pem\b|'
+        # 补的位置型判据:读一旦放开(file_read 走 local_rules 的 read_anywhere),
+        # 这些是唯一的闸门,全部按「存放位置」判定,不引入按文件名关键词的宽匹配。
+        r'/\.claude/settings(\.local)?\.json$|'      # owner 的 ANTHROPIC_AUTH_TOKEN 明文在里面
+        r'/\.config/gh/hosts\.ya?ml$|'                # GitHub token
+        r'/\.config/gcloud(/|$)|'                     # gcloud 凭证
+        r'/\.azure(/|$)|'                             # Azure token
+        r'/\.(zsh|bash)_history$|'                    # 手输过的密钥都在里面
+        r'\.tfstate(\.backup)?$|'                     # terraform state 常含明文密钥
+        r'/Library/Keychains(/|$)|'                   # macOS 钥匙串
         # 按文件名判定的凭证文件。刻意用窄白名单而非泛关键词:这些名字几乎只用于
         # 存凭证,实测在 owner 的三个仓库里命中 8/22006、36/130750、74/48022
         # (均 <0.2%),不会重演关键词匹配那次 32% 的误伤。
@@ -359,7 +368,12 @@ def check_redlines(req: Request) -> str | None:
 
 def local_rules(req: Request) -> Verdict | None:
     """本地路径规则;不适用则返回 None。"""
-    if req.kind not in ('file_read', 'file_write'):
+    if req.kind == 'file_read':
+        # 读放开:到这里说明没命中红线(judge() 里 check_redlines 先跑过,凭证
+        # 位置已被挡住),其余任意路径都允许。读不修改任何东西,而读不到文件
+        # 会让 agent 反复试探、体验更差。
+        return Verdict('allow', 'read_anywhere', 'rule')
+    if req.kind != 'file_write':
         return None
     fp_res = _resolve_path(req.payload, req.cwd)
     cwd_res = str(Path(req.cwd).resolve()) if req.cwd else ''

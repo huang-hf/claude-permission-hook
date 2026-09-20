@@ -104,6 +104,50 @@ class TestRedlineFileHits(unittest.TestCase):
         self.assertIsNone(hit_path("file_read", "/Users/x/proj/main.py"))
 
 
+class TestRedlineCredentialLocationsAddedForReadOpenUp(unittest.TestCase):
+    """读放开(local_rules 对 file_read 一律 allow)后,红线是唯一的闸门。
+
+    这些位置此前没有被 _REDLINES['credentials'] 覆盖,读放开前靠「不在 cwd
+    内就 no_opinion」侥幸兜住;读放开后必须由红线自己挡住。
+    """
+
+    def test_claude_settings_files(self):
+        for path in ["/Users/x/.claude/settings.json",
+                     "/Users/x/.claude/settings.local.json"]:
+            self.assertEqual(hit_path("file_read", path), "credentials", path)
+
+    def test_gh_hosts(self):
+        self.assertEqual(
+            hit_path("file_read", "/Users/x/.config/gh/hosts.yml"), "credentials")
+
+    def test_gcloud_config_dir(self):
+        self.assertEqual(
+            hit_path("file_read", "/Users/x/.config/gcloud/credentials.db"), "credentials")
+
+    def test_azure_dir(self):
+        self.assertEqual(
+            hit_path("file_read", "/Users/x/.azure/accessTokens.json"), "credentials")
+
+    def test_shell_history(self):
+        for path in ["/Users/x/.zsh_history", "/Users/x/.bash_history"]:
+            self.assertEqual(hit_path("file_read", path), "credentials", path)
+
+    def test_terraform_state(self):
+        for path in ["/Users/x/infra/terraform.tfstate",
+                     "/Users/x/infra/terraform.tfstate.backup"]:
+            self.assertEqual(hit_path("file_read", path), "credentials", path)
+
+    def test_macos_keychains(self):
+        self.assertEqual(
+            hit_path("file_read", "/Users/x/Library/Keychains/login.keychain-db"),
+            "credentials")
+
+    def test_coffer_paths_already_covered(self):
+        """owner 明确的例外:coffer 位置已被既有 \\bcoffer\\b 覆盖,不需要新增判据。"""
+        for path in ["/Users/x/.coffer/key", "/Users/x/.config/coffer/settings.toml"]:
+            self.assertEqual(hit_path("file_read", path), "credentials", path)
+
+
 class TestRedlineMisses(unittest.TestCase):
     """只读操作必须不被红线拦截,否则通过率会被打死。"""
 

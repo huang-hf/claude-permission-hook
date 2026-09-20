@@ -15,13 +15,28 @@ class TestJudgeFileOps(unittest.TestCase):
             self.assertEqual(v.decision, "allow")
             self.assertEqual(v.reason, "within_cwd")
 
-    def test_outside_cwd_returns_no_opinion(self):
-        """文件操作落空 → no_opinion(静默),不进入 dippy,也不出网。"""
+    def test_write_outside_cwd_returns_no_opinion(self):
+        """写操作落空 → no_opinion(静默),不进入 dippy,也不出网。行为不变。"""
+        with tempfile.TemporaryDirectory() as cwd, tempfile.TemporaryDirectory() as other:
+            f = Path(other) / "b.txt"; f.write_text("x")
+            v = sh.judge(sh.Request("file_write", str(f), cwd))
+            self.assertEqual(v.decision, "no_opinion")
+            self.assertEqual(v.reason, "outside_cwd")
+
+    def test_read_outside_cwd_now_allowed(self):
+        """读放开:cwd 之外的路径也 allow/read_anywhere,只要不命中凭证红线。"""
         with tempfile.TemporaryDirectory() as cwd, tempfile.TemporaryDirectory() as other:
             f = Path(other) / "b.txt"; f.write_text("x")
             v = sh.judge(sh.Request("file_read", str(f), cwd))
-            self.assertEqual(v.decision, "no_opinion")
-            self.assertEqual(v.reason, "outside_cwd")
+            self.assertEqual(v.decision, "allow")
+            self.assertEqual(v.reason, "read_anywhere")
+
+    def test_read_of_credential_path_still_asks(self):
+        """红线在 local_rules 之前跑:凭证位置的读依然被拦,不受读放开影响。"""
+        with tempfile.TemporaryDirectory() as cwd:
+            v = sh.judge(sh.Request("file_read", "/Users/x/.ssh/id_rsa", cwd))
+            self.assertEqual(v.decision, "ask")
+            self.assertEqual(v.layer, "redline")
 
     def test_file_ops_never_reach_remote(self):
         """守卫:文件操作绝不调用远程后端。"""
