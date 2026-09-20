@@ -20,7 +20,26 @@ Switches (env vars):
   SECURE_HANDLER_INSECURE_TLS=1           skip cert verification for local MITM proxies (default: verify)
 
 Audit log: ~/.claude/logs/permission_audit.jsonl
-  Fields: ts / cmd / tool / decision / layer / ai / reason
+  Always written: ts / tool / decision / layer / reason / hook_event_name
+  Written when present: cmd / ai / backend / scores / elapsed_ms
+
+  `decision` says what THIS hook decided, which is not the same as what the
+  user saw:
+    allow       -> printed an allow; the call ran without a prompt
+    ask         -> printed an ask; the user was prompted
+    no_opinion  -> printed nothing; the agent's own rules and mode decided,
+                   so the user may or may not have been prompted
+  Counting `ask` as "the user was prompted" therefore overstates prompts,
+  and counting `no_opinion` that way overstates them badly.
+
+  One exception: `layer='error'` rows record `decision='ask'` but print
+  nothing (the fail-safe exits silently). The value is kept as `ask` so the
+  row still reads as "this did not auto-approve"; treat `layer='error'` as
+  a diagnostic signal rather than a prompt.
+
+  `hook_event_name` is written on every row, `null` included, so that
+  "the input carried no such field" stays distinguishable from "this row
+  predates the field".
 """
 
 from __future__ import annotations
@@ -372,7 +391,12 @@ def main():
     except Exception:
         try:
             tool = data.get('tool_name', '') if isinstance(data, dict) else ''
-            write_audit(req.payload if req else '', tool, 'ask', 'error')
+            # hook_event 也要传:不传的话它会记成 null,于是「输入里没有这个
+            # 字段」和「出错了没取到」就分不开了 —— 而区分这两者正是记录
+            # 该字段的全部意义。
+            write_audit(req.payload if req else '', tool, 'ask', 'error',
+                        hook_event=(data.get('hook_event_name')
+                                    if isinstance(data, dict) else None))
         except Exception:
             pass
         sys.exit(0)
