@@ -76,28 +76,6 @@ def write_audit(cmd: str, tool: str, decision: str, layer: str,
 
 
 # ══════════════════════════════════════════════════════════════════
-# Response helpers (PreToolUse format)
-# ══════════════════════════════════════════════════════════════════
-
-def _pre_tool_response(decision: str, reason: str) -> dict:
-    return {
-        'hookSpecificOutput': {
-            'hookEventName': 'PreToolUse',
-            'permissionDecision': decision,
-            'permissionDecisionReason': reason,
-        }
-    }
-
-
-def allow_response(reason: str = '') -> dict:
-    return _pre_tool_response('allow', reason)
-
-
-def ask_response(reason: str = '') -> dict:
-    return _pre_tool_response('ask', f'🔍 {reason}')
-
-
-# ══════════════════════════════════════════════════════════════════
 # AI fallback
 # ══════════════════════════════════════════════════════════════════
 
@@ -308,11 +286,22 @@ def parse_claude_code(data: dict) -> Request | None:
     return None
 
 
+_CC_DISPLAY = {'within_cwd': 'within cwd', 'git_metadata': 'git metadata dir'}
+
+
 def emit_claude_code(verdict: Verdict) -> str | None:
-    """把 Verdict 翻译成 Claude Code 期望的 stdout;no_opinion 返回 None(静默)。"""
+    """把 Verdict 翻译成 Claude Code 期望的 stdout;no_opinion 返回 None(静默)。
+
+    展示层:stdout 的 permissionDecisionReason 是给人看的文案,与审计里
+    机器可读的 verdict.reason 刻意不同(重构前即如此,这里只是保持一致)。
+    """
     if verdict.decision == 'no_opinion':
         return None
     reason = verdict.reason
+    if verdict.decision == 'allow' and verdict.layer == 'ai':
+        reason = f'ai:SAFE ({reason})'
+    else:
+        reason = _CC_DISPLAY.get(reason, reason)
     if verdict.decision == 'ask':
         reason = f'🔍 {reason}'
     return json.dumps({
@@ -362,8 +351,8 @@ def main():
 
     except Exception:
         try:
-            write_audit(req.payload if req else '', data.get('tool_name', ''),
-                        'ask', 'error')
+            tool = data.get('tool_name', '') if isinstance(data, dict) else ''
+            write_audit(req.payload if req else '', tool, 'ask', 'error')
         except Exception:
             pass
         sys.exit(0)
