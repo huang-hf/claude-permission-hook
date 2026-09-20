@@ -259,12 +259,19 @@ _REDLINES = {
         r'\baws\s+s3\s+rm\b', re.I),
     # 凭证位置。对命令和文件路径都适用 —— 路径指向凭证存放处,与它怎么被提到无关。
     'credentials': re.compile(
-        r'\bcoffer\b|/\.(ssh|aws|kube|gnupg)(/|$)|~/\.(ssh|aws|kube|gnupg)|'
-        r'/\.netrc\b|/\.docker/config\.json|\bid_rsa\b|\.pem\b', re.I),
+        r'\bcoffer\b|/\.(ssh|aws|kube|gnupg)(/|$)|~/\.(ssh|aws|kube|gnupg)(/|$)|'
+        r'/\.netrc\b|/\.docker/config\.json|\bid_rsa\b|\.pem\b|'
+        # 按文件名判定的凭证文件。刻意用窄白名单而非泛关键词:这些名字几乎只用于
+        # 存凭证,实测在 owner 的三个仓库里命中 8/22006、36/130750、74/48022
+        # (均 <0.2%),不会重演关键词匹配那次 32% 的误伤。
+        r'(^|/)(\.env(\.|$)|\.git-credentials|\.npmrc|\.pypirc|\.pgpass|'
+        r'authorized_keys|kubeconfig|secrets?\.ya?ml)|\.(key|p12|pfx|jks)$', re.I),
     'destructive': re.compile(
         # rm 的 -r/-f 不一定是第一个 token(如 `rm -i -rf x`、`rm --recursive --force x`),
         # 用前瞻扫整条 rm 调用(遇 ; & | 截断,避免跨命令误伤)而不是死认第一个参数。
-        r'\brm\b(?=[^;&|]*\s-{1,2}(?:[a-z]*[rf]|recursive|force)\b)|'
+        # (?<!-) 挡住 `--rm` 里的 rm:否则 `docker run --rm --user 1000` 会命中,
+        # 因为 `[a-z]*[rf]` 匹配任何以 r/f 结尾的 flag(--user、--filter、--platform…)。
+        r'(?<!-)\brm\b(?=[^;&|]*\s-{1,2}(?:[a-z]*[rf]|recursive|force)\b)|'
         r'\bgit\s+push\b[^;&|]*\s-(?:f\b|-force)|'
         r'\bgit\s+reset\b[^;&|]*\s--hard\b|'
         r'\bgit\s+clean\b[^;&|]*\s-[a-zA-Z]*f[a-zA-Z]*d[a-zA-Z]*\b|'

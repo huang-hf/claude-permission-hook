@@ -117,6 +117,71 @@ class TestRedlineMisses(unittest.TestCase):
             self.assertIsNone(hit(cmd), cmd)
 
 
+class TestCredentialWordsAreCommandOnly(unittest.TestCase):
+    """凭证关键词只对命令生效,不对文件路径生效。
+
+    这条约束是量出来的,不是设计偏好:按路径匹配 token/secret/password 时,
+    owner 的一个仓库有 8348/25687(32%)的源文件名命中,等于每三次文件编辑
+    弹一次窗。位置(在 ~/.ssh 下)和命名(叫 token_utils.py)是强度完全不同
+    的证据。若有人把关键词分支改回对路径生效,下面第二组会变红。
+    """
+
+    def test_keywords_still_flag_commands(self):
+        for cmd in ["export AWS_SECRET_ACCESS_KEY=x",
+                    "export GITHUB_TOKEN=ghp_xxx",
+                    "aws secretsmanager get-secret-value --secret-id x"]:
+            self.assertEqual(hit(cmd), "credentials", cmd)
+
+    def test_keywords_do_not_flag_file_paths(self):
+        for path in ["/Users/x/repo/token_utils.py",
+                     "/Users/x/repo/erc20_token_config.ts",
+                     "/Users/x/repo/password_reset.tsx",
+                     "/Users/x/repo/secret_handoff.py"]:
+            for kind in ("file_read", "file_write"):
+                self.assertIsNone(hit_path(kind, path), f"{kind} {path}")
+
+
+class TestCredentialFilesByName(unittest.TestCase):
+    """凭证文件按文件名拦截 —— 窄白名单,不是泛关键词。
+
+    这些文件放在项目目录内时会被 local_rules 的 within_cwd 放行,所以必须由
+    红线兜住。实测该白名单在 owner 三个仓库的命中率均 <0.2%。
+    """
+
+    def test_credential_files_are_blocked(self):
+        for path in ["/Users/x/repo/.env", "/Users/x/repo/.env.prod",
+                     "/Users/x/repo/.git-credentials", "/Users/x/repo/.npmrc",
+                     "/Users/x/repo/k8s/secret.yaml", "/Users/x/repo/certs/server.key",
+                     "/Users/x/repo/kubeconfig"]:
+            self.assertEqual(hit_path("file_write", path), "credentials", path)
+
+    def test_ordinary_files_are_not_blocked(self):
+        for path in ["/Users/x/repo/main.py", "/Users/x/repo/keys.ts",
+                     "/Users/x/repo/monkey.py", "/Users/x/repo/environment.ts"]:
+            self.assertIsNone(hit_path("file_write", path), path)
+
+
+class TestDockerRmIsNotDestructive(unittest.TestCase):
+    """`--rm` 里的 rm 不得触发 destructive。
+
+    前瞻里的 `[a-z]*[rf]` 会匹配任何以 r/f 结尾的 flag(--user、--filter、
+    --platform…),所以少了 (?<!-) 时 `docker run --rm --user 1000` 会被判危。
+    docker --rm 是日常高频写法,误报代价很高。
+    """
+
+    def test_docker_rm_flag_is_ignored(self):
+        for cmd in ["docker run --rm alpine echo hi",
+                    "docker build --rm -f Dockerfile -t app .",
+                    "docker run --rm --user 1000 alpine id",
+                    "docker run --rm -v $PWD:/app node npm test"]:
+            self.assertIsNone(hit(cmd), cmd)
+
+    def test_real_rm_still_caught(self):
+        for cmd in ["rm -rf /tmp/x", "/bin/rm -rf x", "sudo rm -rf /",
+                    "ls | xargs rm -rf", "git rm -r src/"]:
+            self.assertEqual(hit(cmd), "destructive", cmd)
+
+
 class TestRedlineWiredIntoJudge(unittest.TestCase):
     def test_redline_short_circuits_before_network(self):
         """短路必须覆盖 remote_judge 调用链上的每一跳,不只是最外层。"""
