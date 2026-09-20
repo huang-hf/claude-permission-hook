@@ -257,11 +257,10 @@ _REDLINES = {
         r'\bhelm\s+(upgrade|install|delete|rollback)\b|'
         r'\beksctl\s+(create|delete)\b|'
         r'\baws\s+s3\s+rm\b', re.I),
+    # 凭证位置。对命令和文件路径都适用 —— 路径指向凭证存放处,与它怎么被提到无关。
     'credentials': re.compile(
-        r'\bcoffer\b|/\.(ssh|aws|kube|gnupg)(/|$)|~/\.ssh|/\.netrc\b|/\.docker/config\.json|'
-        # 关键字分支刻意不加后置 \b:下划线(如 AWS_SECRET_ACCESS_KEY、GITHUB_TOKEN)
-        # 两侧都是 \w,会把词边界吃掉,漏报比误报更危险,这里接受更多误报换漏报归零。
-        r'(secret|secretsmanager|credential|private[_-]?key|password|token)', re.I),
+        r'\bcoffer\b|/\.(ssh|aws|kube|gnupg)(/|$)|~/\.(ssh|aws|kube|gnupg)|'
+        r'/\.netrc\b|/\.docker/config\.json|\bid_rsa\b|\.pem\b', re.I),
     'destructive': re.compile(
         # rm 的 -r/-f 不一定是第一个 token(如 `rm -i -rf x`、`rm --recursive --force x`),
         # 用前瞻扫整条 rm 调用(遇 ; & | 截断,避免跨命令误伤)而不是死认第一个参数。
@@ -274,12 +273,28 @@ _REDLINES = {
 }
 
 
+# 凭证「关键词」—— 只对命令生效,不对文件路径生效。
+#
+# 出现在命令文本里的 `token` / `secret` 说明这条命令在摆弄凭证,是有效信号;
+# 出现在文件名里则几乎没有信号 —— 实测 owner 的一个仓库有 32%(8348/25687)
+# 的源文件名含这些词(token_usage.py、erc20_token_config…),按路径匹配会让
+# 每三次文件编辑就弹一次窗。位置(在 ~/.ssh 下)和命名(叫 token_utils.py)
+# 是两种强度完全不同的证据,不能套用同一条规则。
+#
+# 刻意不加两侧 \b:下划线两侧都是 \w,会把词边界吃掉,导致
+# AWS_SECRET_ACCESS_KEY / GITHUB_TOKEN 漏报。
+_CREDENTIAL_WORDS = re.compile(
+    r'(secret|secretsmanager|credential|private[_-]?key|password|token)', re.I)
+
+
 def check_redlines(req: Request) -> str | None:
     """命中返回类别名,否则 None。刻意做宽:误报只多弹一次窗,漏报可能放行危险命令。"""
     text = req.payload or ''
     for name, rx in _REDLINES.items():
         if rx.search(text):
             return name
+    if req.kind == 'command' and _CREDENTIAL_WORDS.search(text):
+        return 'credentials'
     return None
 
 
