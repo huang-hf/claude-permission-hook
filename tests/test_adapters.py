@@ -55,5 +55,32 @@ class TestEmit(unittest.TestCase):
         self.assertIsNone(sh.emit_claude_code(sh.Verdict("no_opinion", "outside_cwd", "rule")))
 
 
+class TestDisplayMappingIsLayerKeyed(unittest.TestCase):
+    """展示层映射必须按 layer 取键,不能按 reason 文本匹配。
+
+    dippy 对未识别命令会把命令原文当 reason 返回,若按文本匹配,
+    一条恰好叫 within_cwd 的命令就会被套上 rule 层的展示文案。
+    Task 6/7 引入 redline reason 码后,这类冲突只会更多。
+    """
+
+    def _shown(self, verdict):
+        import json
+        out = sh.emit_claude_code(verdict)
+        return json.loads(out)["hookSpecificOutput"]["permissionDecisionReason"]
+
+    def test_rule_layer_gets_display_text(self):
+        self.assertEqual(self._shown(sh.Verdict("allow", "within_cwd", "rule")), "within cwd")
+        self.assertEqual(self._shown(sh.Verdict("allow", "git_metadata", "rule")), "git metadata dir")
+
+    def test_non_rule_layers_keep_raw_reason(self):
+        self.assertEqual(self._shown(sh.Verdict("ask", "within_cwd", "ai")), "🔍 within_cwd")
+        self.assertEqual(self._shown(sh.Verdict("ask", "git_metadata", "ai")), "🔍 git_metadata")
+        self.assertEqual(self._shown(sh.Verdict("allow", "within_cwd", "dippy")), "within_cwd")
+
+    def test_ai_allow_still_gets_prefix(self):
+        self.assertEqual(self._shown(sh.Verdict("allow", "sh interactive", "ai")),
+                         "ai:SAFE (sh interactive)")
+
+
 if __name__ == "__main__":
     unittest.main()

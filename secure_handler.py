@@ -300,7 +300,7 @@ def emit_claude_code(verdict: Verdict) -> str | None:
     reason = verdict.reason
     if verdict.decision == 'allow' and verdict.layer == 'ai':
         reason = f'ai:SAFE ({reason})'
-    else:
+    elif verdict.layer == 'rule':
         reason = _CC_DISPLAY.get(reason, reason)
     if verdict.decision == 'ask':
         reason = f'🔍 {reason}'
