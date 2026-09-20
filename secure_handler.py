@@ -286,7 +286,7 @@ def parse_claude_code(data: dict) -> Request | None:
     return None
 
 
-_CC_DISPLAY = {'within_cwd': 'within cwd', 'git_metadata': 'git metadata dir'}
+_CC_RULE_DISPLAY = {'within_cwd': 'within cwd', 'git_metadata': 'git metadata dir'}
 
 
 def emit_claude_code(verdict: Verdict) -> str | None:
@@ -301,7 +301,7 @@ def emit_claude_code(verdict: Verdict) -> str | None:
     if verdict.decision == 'allow' and verdict.layer == 'ai':
         reason = f'ai:SAFE ({reason})'
     elif verdict.layer == 'rule':
-        reason = _CC_DISPLAY.get(reason, reason)
+        reason = _CC_RULE_DISPLAY.get(reason, reason)
     if verdict.decision == 'ask':
         reason = f'🔍 {reason}'
     return json.dumps({
