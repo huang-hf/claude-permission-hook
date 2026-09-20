@@ -56,7 +56,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # Verify certificates by default; set SECURE_HANDLER_INSECURE_TLS=1 to skip (local MITM proxies)
-_SSL_CTX = ssl.create_default_context()
+#
+# 钉死的解释器 (/usr/local/bin/python3.12) 没有系统 CA 库,
+# ssl.create_default_context() 拿不到 cafile/capath,任何 HTTPS 请求都会
+# CERTIFICATE_VERIFY_FAILED。优先用 certifi 的 CA bundle;certifi 不可用
+# (未安装)时退回标准库默认行为——不引入硬依赖,只是不一定能验证成功。
+try:
+    import certifi
+    _SSL_CTX = ssl.create_default_context(cafile=certifi.where())
+except Exception:
+    _SSL_CTX = ssl.create_default_context()
 if os.getenv('SECURE_HANDLER_INSECURE_TLS') == '1':
     _SSL_CTX.check_hostname = False
     _SSL_CTX.verify_mode = ssl.CERT_NONE
@@ -145,7 +154,7 @@ def _ai_endpoint() -> tuple[str, str]:
     return base, token
 
 
-def ask_ai(command: str, cwd: str = '') -> tuple[bool, str]:
+def ask_ai(command: str, cwd: str = '', timeout: int | None = None) -> tuple[bool, str]:
     base_url, auth_token = _ai_endpoint()
     if not auth_token:
         return False, 'no_token'
@@ -173,7 +182,8 @@ def ask_ai(command: str, cwd: str = '') -> tuple[bool, str]:
 
     req = urllib.request.Request(url, data=payload, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=AI_FALLBACK_TIMEOUT, context=_SSL_CTX) as resp:
+        with urllib.request.urlopen(req, timeout=timeout or AI_FALLBACK_TIMEOUT,
+                                    context=_SSL_CTX) as resp:
             data = json.loads(resp.read())
             if AI_API_STYLE == 'openai':
                 text = data['choices'][0]['message']['content']
@@ -342,13 +352,75 @@ def local_rules(req: Request) -> Verdict | None:
     return None
 
 
+TYPESAFE_QUESTIONS = {
+    'irreversible':   '不可逆地删除或覆盖数据',
+    'outside_proj':   '修改当前项目目录之外的文件',
+    'exfiltration':   '把本地数据发送到外部网络(推送到已知 git remote 不算)',
+    'untrusted_exec': '下载并执行未经审查的代码,如 curl | sh',
+    'sys_config':     '修改系统级配置或已安装软件',
+}
+
+
+def backend_typesafe(req: Request) -> Verdict:
+    """TypeSafe 结构化判断。任何异常 → ask(fail-safe)。"""
+    url = os.getenv('SECURE_HANDLER_TYPESAFE_URL',
+                    'https://api.typesafe.ai/v1/systemone')
+    key = os.getenv('SECURE_HANDLER_TYPESAFE_KEY', '')
+    model = os.getenv('SECURE_HANDLER_TYPESAFE_MODEL', 'jev-latest')
+    try:
+        threshold = float(os.getenv('SECURE_HANDLER_THRESHOLD', '0.15'))
+    except ValueError:
+        threshold = 0.15
+    if not key:
+        return Verdict('ask', 'typesafe_no_key', 'typesafe')
+
+    payload = json.dumps({
+        'state': f'cwd: {req.cwd}\ncommand: {req.payload}',
+        'model': model,
+        'questions': {k: {'type': 'noul', 'instructions': v}
+                      for k, v in TYPESAFE_QUESTIONS.items()},
+    }).encode()
+    request = urllib.request.Request(url, data=payload, headers={
+        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {key}',
+    })
+    try:
+        with urllib.request.urlopen(request, timeout=6, context=_SSL_CTX) as resp:
+            data = json.loads(resp.read())
+        answers = data.get('answers') or {}
+        scores = {k: float(v.get('noul', 1.0)) for k, v in answers.items()}
+        if not scores:
+            return Verdict('ask', 'typesafe_empty', 'typesafe')
+        worst = max(scores.values())
+        decision = 'allow' if worst < threshold else 'ask'
+        return Verdict(decision, f'typesafe max={worst:.2f}', 'typesafe',
+                       json.dumps(scores))
+    except Exception as e:
+        return Verdict('ask', f'typesafe_error:{type(e).__name__}', 'typesafe')
+
+
 def remote_judge(req: Request) -> Verdict:
-    """远程判断层。阶段一仅保留现有 anthropic AI 兜底行为。"""
+    """远程判断层。默认后端 anthropic,与升级前行为一致。"""
     action, reason = dippy_analyze(req.payload, req.cwd)
     if action == 'allow':
         return Verdict('allow', reason, 'dippy')
+
+    backend = os.getenv('SECURE_HANDLER_BACKEND', 'anthropic').strip().lower()
+    if backend == 'off':
+        # decision='no_opinion' 才能让 emit_claude_code 保持静默,见 Global Constraints。
+        return Verdict('no_opinion', reason, 'fallthrough')
+
+    if backend == 'typesafe':
+        v = backend_typesafe(req)
+        # 降级只因「错误」,不因「否定」——判危直接 ask,不再去旧 gateway 碰运气。
+        if v.decision == 'ask' and v.reason.startswith('typesafe_error'):
+            if AI_FALLBACK_ENABLED:
+                is_safe, ai_raw = ask_ai(req.payload, req.cwd, timeout=4)
+                return Verdict('allow' if is_safe else 'ask', reason, 'ai', ai_raw)
+        return v
+
     if AI_FALLBACK_ENABLED:
-        is_safe, ai_raw = ask_ai(req.payload, req.cwd)
+        is_safe, ai_raw = ask_ai(req.payload, req.cwd)   # 主后端:沿用 15s
         return Verdict('allow' if is_safe else 'ask', reason, 'ai', ai_raw)
     # 重构前此分支只写审计、不打印(交回 Claude Code 自身的默认权限提示)。
     # decision='no_opinion' 才能让 emit_claude_code 保持静默;main() 里的
