@@ -50,6 +50,8 @@ import re
 import ssl
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.request
 from collections import namedtuple
 from datetime import datetime, timezone
@@ -75,6 +77,10 @@ AI_FALLBACK_ENABLED: bool = os.getenv('SECURE_HANDLER_AI_FALLBACK', '1') != '0'
 AI_API_STYLE: str = os.getenv('SECURE_HANDLER_AI_API', 'anthropic').strip().lower()  # anthropic | openai
 AI_FALLBACK_MODEL = os.getenv('SECURE_HANDLER_AI_MODEL', 'claude-haiku-4-5-20251001')  # lightweight & fast
 AI_FALLBACK_TIMEOUT = 15
+try:
+    TYPESAFE_TIMEOUT = float(os.getenv('SECURE_HANDLER_TYPESAFE_TIMEOUT', '6'))
+except ValueError:
+    TYPESAFE_TIMEOUT = 6
 AUDIT_LOG_PATH = Path(os.getenv('SECURE_HANDLER_AUDIT_LOG')
                       or Path.home() / '.claude' / 'logs' / 'permission_audit.jsonl')
 
@@ -180,9 +186,12 @@ def ask_ai(command: str, cwd: str = '', timeout: int | None = None) -> tuple[boo
             'messages': [{'role': 'user', 'content': content}],
         }).encode()
 
+    if timeout is None:
+        timeout = AI_FALLBACK_TIMEOUT
+
     req = urllib.request.Request(url, data=payload, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout or AI_FALLBACK_TIMEOUT,
+        with urllib.request.urlopen(req, timeout=timeout,
                                     context=_SSL_CTX) as resp:
             data = json.loads(resp.read())
             if AI_API_STYLE == 'openai':
@@ -268,9 +277,12 @@ def _is_git_metadata(fp_resolved: str, common_dir: str | None) -> bool:
 
 Request = namedtuple('Request', 'kind payload cwd')
 #   kind: 'command' | 'file_read' | 'file_write'
-Verdict = namedtuple('Verdict', 'decision reason layer ai', defaults=(None,))
+Verdict = namedtuple('Verdict', 'decision reason layer ai backend scores elapsed_ms',
+                     defaults=(None, None, None, None))
 #   decision: 'allow' | 'ask' | 'no_opinion'
 #   ai: 后端原始响应,仅供审计;默认 None,因此 Verdict('allow','x','rule') 仍合法
+#   backend/scores/elapsed_ms: 供审计用的标定数据(Task 6 write_audit 已支持这三个
+#   字段但一直没有写入方;这里补上),默认均为 None,不影响既有只传 4 个位置参数的调用点
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -362,7 +374,14 @@ TYPESAFE_QUESTIONS = {
 
 
 def backend_typesafe(req: Request) -> Verdict:
-    """TypeSafe 结构化判断。任何异常 → ask(fail-safe)。"""
+    """TypeSafe 结构化判断。
+
+    异常分两类,reason 前缀不同,决定 remote_judge 是否可以降级到旧 gateway:
+      typesafe_neterror:*  传输层故障(连不上/超时/HTTP 错误)—— 基础设施问题,
+                           可以降级去找另一家后端碰运气。
+      typesafe_badresp:*   后端连上了但返回解析不出结果 —— 后端本身有问题,
+                           直接 ask,不降级(降级等于去找一个更宽松的裁判)。
+    """
     url = os.getenv('SECURE_HANDLER_TYPESAFE_URL',
                     'https://api.typesafe.ai/v1/systemone')
     key = os.getenv('SECURE_HANDLER_TYPESAFE_KEY', '')
@@ -372,7 +391,7 @@ def backend_typesafe(req: Request) -> Verdict:
     except ValueError:
         threshold = 0.15
     if not key:
-        return Verdict('ask', 'typesafe_no_key', 'typesafe')
+        return Verdict('ask', 'typesafe_no_key', 'typesafe', backend='typesafe')
 
     payload = json.dumps({
         'state': f'cwd: {req.cwd}\ncommand: {req.payload}',
@@ -384,19 +403,36 @@ def backend_typesafe(req: Request) -> Verdict:
         'Content-Type': 'application/json',
         'Authorization': f'Bearer {key}',
     })
+
+    start = time.monotonic()
     try:
-        with urllib.request.urlopen(request, timeout=6, context=_SSL_CTX) as resp:
-            data = json.loads(resp.read())
+        with urllib.request.urlopen(request, timeout=TYPESAFE_TIMEOUT,
+                                    context=_SSL_CTX) as resp:
+            raw = resp.read()
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        return Verdict('ask', f'typesafe_neterror:{type(e).__name__}', 'typesafe',
+                       backend='typesafe', elapsed_ms=elapsed_ms)
+    except Exception as e:
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        return Verdict('ask', f'typesafe_badresp:{type(e).__name__}', 'typesafe',
+                       backend='typesafe', elapsed_ms=elapsed_ms)
+
+    elapsed_ms = int((time.monotonic() - start) * 1000)
+    try:
+        data = json.loads(raw)
         answers = data.get('answers') or {}
         scores = {k: float(v.get('noul', 1.0)) for k, v in answers.items()}
         if not scores:
-            return Verdict('ask', 'typesafe_empty', 'typesafe')
+            return Verdict('ask', 'typesafe_empty', 'typesafe',
+                           backend='typesafe', elapsed_ms=elapsed_ms)
         worst = max(scores.values())
         decision = 'allow' if worst < threshold else 'ask'
         return Verdict(decision, f'typesafe max={worst:.2f}', 'typesafe',
-                       json.dumps(scores))
+                       backend='typesafe', scores=scores, elapsed_ms=elapsed_ms)
     except Exception as e:
-        return Verdict('ask', f'typesafe_error:{type(e).__name__}', 'typesafe')
+        return Verdict('ask', f'typesafe_badresp:{type(e).__name__}', 'typesafe',
+                       backend='typesafe', elapsed_ms=elapsed_ms)
 
 
 def remote_judge(req: Request) -> Verdict:
@@ -412,11 +448,15 @@ def remote_judge(req: Request) -> Verdict:
 
     if backend == 'typesafe':
         v = backend_typesafe(req)
-        # 降级只因「错误」,不因「否定」——判危直接 ask,不再去旧 gateway 碰运气。
-        if v.decision == 'ask' and v.reason.startswith('typesafe_error'):
+        # 只对传输类错误降级(typesafe_neterror:*)——「连不上」是基础设施问题,
+        # 换一家合理。解析类错误(typesafe_badresp:*,后端返回了垃圾)不降级,
+        # 直接 ask:此时去找更宽松的裁判是在降低安全标准,不是在容错。
+        if v.decision == 'ask' and v.reason.startswith('typesafe_neterror'):
             if AI_FALLBACK_ENABLED:
                 is_safe, ai_raw = ask_ai(req.payload, req.cwd, timeout=4)
-                return Verdict('allow' if is_safe else 'ask', reason, 'ai', ai_raw)
+                # 折进 v.reason,而不是丢弃:审计事后要能看出 TypeSafe 是否在故障。
+                return Verdict('allow' if is_safe else 'ask', f'{reason}|{v.reason}',
+                               'ai', ai_raw)
         return v
 
     if AI_FALLBACK_ENABLED:
@@ -546,6 +586,8 @@ def main():
         tool = data.get('tool_name', '')
         write_audit(req.payload, tool, verdict.decision, verdict.layer,
                     verdict.reason, verdict.ai,
+                    backend=verdict.backend, scores=verdict.scores,
+                    elapsed_ms=verdict.elapsed_ms,
                     hook_event=data.get('hook_event_name') if isinstance(data, dict) else None)
 
         out = emit(verdict, data.get('hook_event_name', 'PreToolUse') if isinstance(data, dict) else 'PreToolUse')

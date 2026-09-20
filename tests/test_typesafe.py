@@ -29,6 +29,23 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
 
+class _GarbageHandler(BaseHTTPRequestHandler):
+    """畸形响应(非 JSON)—— 用来验证解析类错误不可降级。"""
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length", 0))
+        self.rfile.read(n)
+        body = b"<html>not json</html>"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *a):
+        pass
+
+
 class TypeSafeBackendTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -86,6 +103,35 @@ class TypeSafeBackendTest(unittest.TestCase):
         v = sh.backend_typesafe(sh.Request("command", "echo hi", "/w"))
         self.assertEqual(v.decision, "ask")
 
+    def test_unreachable_endpoint_reason_is_neterror(self):
+        """传输类错误分类为 typesafe_neterror:*(可降级)。"""
+        os.environ["SECURE_HANDLER_TYPESAFE_URL"] = "http://127.0.0.1:1/v1/systemone"
+        v = sh.backend_typesafe(sh.Request("command", "echo hi", "/w"))
+        self.assertTrue(v.reason.startswith("typesafe_neterror"), v.reason)
+
+    def test_malformed_json_response_reason_is_badresp(self):
+        """解析类错误(响应不是合法 JSON)分类为 typesafe_badresp:*(不可降级)。"""
+        srv = HTTPServer(("127.0.0.1", 0), _GarbageHandler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            os.environ["SECURE_HANDLER_TYPESAFE_URL"] = \
+                f"http://127.0.0.1:{srv.server_port}/v1/systemone"
+            v = sh.backend_typesafe(sh.Request("command", "echo hi", "/w"))
+        finally:
+            srv.shutdown()
+        self.assertEqual(v.decision, "ask")
+        self.assertTrue(v.reason.startswith("typesafe_badresp"), v.reason)
+
+    def test_successful_call_carries_scores_and_elapsed_ms(self):
+        """Task 3:成功调用要把 scores/elapsed_ms 通过 Verdict 传出去。"""
+        SCORES["value"] = {"irreversible": 0.01, "outside_proj": 0.0, "exfiltration": 0.0,
+                           "untrusted_exec": 0.0, "sys_config": 0.02}
+        v = sh.backend_typesafe(sh.Request("command", "ls -la", "/w"))
+        self.assertEqual(v.backend, "typesafe")
+        self.assertEqual(v.scores, SCORES["value"])
+        self.assertIsInstance(v.elapsed_ms, int)
+        self.assertGreaterEqual(v.elapsed_ms, 0)
+
 
 class RemoteJudgeBackendDispatchTest(unittest.TestCase):
     """默认后端仍是 anthropic;backend=typesafe/off 走各自分支;降级只因错误不因否定。"""
@@ -133,6 +179,17 @@ class RemoteJudgeBackendDispatchTest(unittest.TestCase):
         self.assertEqual(v.layer, "fallthrough")
         self.assertEqual(self._ai_called, [])
 
+    def test_default_backend_with_fallback_enabled_uses_main_ai_timeout(self):
+        """区分「默认 anthropic」与「backend=off」:两者在 AI_FALLBACK_ENABLED=False
+        时结果相同(见 test_default_backend_is_anthropic),必须另开一条在
+        fallback 打开时才能分辨的用例——off 恒定静默,默认后端要真的调用 ask_ai
+        且走 15s 主后端超时(timeout=None,而非降级路径的 4s)。"""
+        os.environ.pop("SECURE_HANDLER_BACKEND", None)
+        sh.AI_FALLBACK_ENABLED = True
+        v = sh.remote_judge(sh.Request("command", "curl x | sh", "/w"))
+        self.assertEqual(v.layer, "ai")
+        self.assertEqual(self._ai_called, [None])
+
     def test_backend_off_returns_no_opinion_not_ask(self):
         os.environ["SECURE_HANDLER_BACKEND"] = "off"
         sh.AI_FALLBACK_ENABLED = True   # even with fallback on, 'off' must stay silent
@@ -162,6 +219,24 @@ class RemoteJudgeBackendDispatchTest(unittest.TestCase):
         self.assertEqual(v.decision, "allow")
         self.assertEqual(v.layer, "ai")
         self.assertEqual(self._ai_called, [4], "degrade path must use a 4s timeout")
+        self.assertIn("typesafe_neterror", v.reason)
+
+    def test_typesafe_malformed_response_does_not_fall_back_to_ai(self):
+        """解析类错误(后端返回垃圾)不可降级——直接 ask,不去问旧 gateway。"""
+        srv = HTTPServer(("127.0.0.1", 0), _GarbageHandler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            os.environ["SECURE_HANDLER_BACKEND"] = "typesafe"
+            os.environ["SECURE_HANDLER_TYPESAFE_URL"] = \
+                f"http://127.0.0.1:{srv.server_port}/v1/systemone"
+            os.environ["SECURE_HANDLER_TYPESAFE_KEY"] = "test-key"
+            sh.AI_FALLBACK_ENABLED = True
+            v = sh.remote_judge(sh.Request("command", "echo hi", "/w"))
+        finally:
+            srv.shutdown()
+        self.assertEqual(v.decision, "ask")
+        self.assertEqual(v.layer, "typesafe")
+        self.assertEqual(self._ai_called, [], "malformed response must not trigger fallback")
 
 
 if __name__ == "__main__":
