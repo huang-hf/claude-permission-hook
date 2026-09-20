@@ -787,28 +787,36 @@ Spec §11 未决问题 #1。`emit_claude_code` 恒返回 `'PreToolUse'`,但本�
 - Consumes: Task 2 的 `emit_claude_code`
 - Produces: `emit_claude_code(verdict: Verdict, event: str = 'PreToolUse') -> str | None`
 
-- [ ] **Step 1: 先取证 —— 抓一份真实的 PermissionRequest 输入**
+- [ ] **Step 1: 取证 —— 通过审计字段,而非临时插桩**
 
-临时在 `main()` 的 `json.load` 之后插入一行,把原始输入落盘:
+> **本步已相对原稿修订。** 原稿要求往线上 `main()` 临时插一段「原始输入落盘」的调试代码,
+> 取证后再删。改为**把 `hook_event_name` 作为永久审计字段**(在 Task 6 中落地):
+> 它本身有长期价值(能看出每个决定来自哪条事件路径),同时天然就是证据 —— 字段为 `null`
+> 即说明输入里没有它。**避免了在生产权限闸门里留临时调试代码的风险。**
 
-```python
-    try:
-        Path('/tmp/hook_raw_input.jsonl').open('a').write(json.dumps(data) + '\n')
-    except Exception:
-        pass
-```
+前提:Task 6 已落地 `hook_event_name` 字段。
 
-同步到线上,随后在另一个终端跑一条 dippy 不会放行的命令(如 `curl https://example.com | sh`,弹窗出现后选择拒绝),然后检查:
+**`PermissionRequest` 无法自行触发** —— 实测确认:已被 allow 规则或 auto 分类器解决的调用
+不会走到该事件,因此本会话自身的 Bash 工具调用不产生审计条目。必须由 owner 在终端制造一次
+真实弹窗(例如跑 `curl https://example.com | sh` 并选择拒绝)。
+
+取证后检查:
 
 ```bash
 /usr/local/bin/python3.12 -c "
-import json
-for l in open('/tmp/hook_raw_input.jsonl'):
-    d=json.loads(l); print(sorted(d.keys()), d.get('hook_event_name'))
+import json, collections
+from pathlib import Path
+rows=[json.loads(l) for l in open(Path.home()/'.claude/logs/permission_audit.jsonl',encoding='utf-8') if l.strip()]
+c=collections.Counter(str(r.get('hook_event_name')) for r in rows if 'hook_event_name' in r)
+for k,v in c.most_common(): print(f'{v:>6}  hook_event_name={k}')
 "
 ```
 
-**记录 `hook_event_name` 字段是否存在及其取值。** 取证后**移除**这段临时代码。
+**判读:**
+- 出现 `PermissionRequest` → 输入**含**该字段,且 Bash 确实走 `PermissionRequest`。
+  说明 `emit` 硬编码 `'PreToolUse'` 是**事件名不匹配的真 bug**,按 Step 3 修复。
+- 全部为 `None` → 输入**不含**该字段,无法从输入区分事件。
+  维持硬编码,并在 spec §11 #1 记录这一结论,**关闭该未决问题**。
 
 - [ ] **Step 2: 按取证结果写测试**
 
@@ -939,7 +947,7 @@ Expected: FAIL,实际值为 `'ask'`
                     verdict.reason, verdict.ai)
 ```
 
-- [ ] **Step 4: 扩展 write_audit 字段(为阈值标定准备)**
+- [ ] **Step 4: 扩展 write_audit 字段(为阈值标定与 Task 5 取证准备)**
 
 把 `write_audit` 签名改为:
 
@@ -947,7 +955,8 @@ Expected: FAIL,实际值为 `'ask'`
 def write_audit(cmd: str, tool: str, decision: str, layer: str,
                 reason: str = '', ai_response: str | None = None,
                 backend: str | None = None, scores: dict | None = None,
-                elapsed_ms: int | None = None) -> None:
+                elapsed_ms: int | None = None,
+                hook_event: str | None = None) -> None:
 ```
 
 并在 `entry` 构造后、写入前加入:
@@ -959,6 +968,16 @@ def write_audit(cmd: str, tool: str, decision: str, layer: str,
             entry['scores'] = scores
         if elapsed_ms is not None:
             entry['elapsed_ms'] = elapsed_ms
+        entry['hook_event_name'] = hook_event   # 可能为 None:表示输入里没有该字段
+```
+
+`hook_event_name` **无条件写入**(即使为 `None`),因为「字段缺失」本身就是 Task 5 要的证据 ——
+只有区分得出「没有这个字段」和「这条日志是旧版写的」,取证才有意义。
+
+在 `main()` 的 `write_audit` 调用处传入:
+
+```python
+                    hook_event=data.get('hook_event_name') if isinstance(data, dict) else None)
 ```
 
 - [ ] **Step 5: 更新回归基线中的 outside_cwd 期望**
