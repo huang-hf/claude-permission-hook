@@ -250,12 +250,26 @@ Verdict = namedtuple('Verdict', 'decision reason layer ai', defaults=(None,))
 _REDLINES = {
     'prod_infra': re.compile(
         r'\bkubectl\b.*\b(apply|delete|exec|patch|edit|scale|rollout|replace|cp|'
-        r'drain|cordon|label|annotate|set|run|taint|debug|proxy|port-forward)\b', re.I),
+        r'drain|cordon|label|annotate|set|run|taint|debug|proxy|port-forward|'
+        r'create|uncordon|attach|expose|autoscale|rollback)\b|'
+        r'\bkubectl\s+config\s+use-context\b|'
+        r'\bterraform\s+(apply|destroy)\b|'
+        r'\bhelm\s+(upgrade|install|delete|rollback)\b|'
+        r'\beksctl\s+(create|delete)\b|'
+        r'\baws\s+s3\s+rm\b', re.I),
     'credentials': re.compile(
-        r'\bcoffer\b|/\.ssh/|/\.aws/|~/\.ssh|'
-        r'\b(secret|secretsmanager|credential|private[_-]?key|password|token)\b', re.I),
+        r'\bcoffer\b|/\.(ssh|aws|kube|gnupg)(/|$)|~/\.ssh|/\.netrc\b|/\.docker/config\.json|'
+        # 关键字分支刻意不加后置 \b:下划线(如 AWS_SECRET_ACCESS_KEY、GITHUB_TOKEN)
+        # 两侧都是 \w,会把词边界吃掉,漏报比误报更危险,这里接受更多误报换漏报归零。
+        r'(secret|secretsmanager|credential|private[_-]?key|password|token)', re.I),
     'destructive': re.compile(
-        r'\brm\s+-[rf]|\bgit\s+push\b.*--force|--force\b.*\bgit\s+push|'
+        # rm 的 -r/-f 不一定是第一个 token(如 `rm -i -rf x`、`rm --recursive --force x`),
+        # 用前瞻扫整条 rm 调用(遇 ; & | 截断,避免跨命令误伤)而不是死认第一个参数。
+        r'\brm\b(?=[^;&|]*\s-{1,2}(?:[a-z]*[rf]|recursive|force)\b)|'
+        r'\bgit\s+push\b[^;&|]*\s-(?:f\b|-force)|'
+        r'\bgit\s+reset\b[^;&|]*\s--hard\b|'
+        r'\bgit\s+clean\b[^;&|]*\s-[a-zA-Z]*f[a-zA-Z]*d[a-zA-Z]*\b|'
+        r'\bgit\s+clean\b[^;&|]*\s-[a-zA-Z]*d[a-zA-Z]*f[a-zA-Z]*\b|'
         r'\bdrop\s+(table|database)\b|\btruncate\b|\bdd\s+if=|\bmkfs\b', re.I),
 }
 
