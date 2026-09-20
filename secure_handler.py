@@ -327,18 +327,19 @@ _REDLINES = {
 }
 
 
-# 凭证「关键词」—— 只对命令生效,不对文件路径生效。
+# 只匹配「在操作凭证」的形态,不匹配「提到了这个词」。
 #
-# 出现在命令文本里的 `token` / `secret` 说明这条命令在摆弄凭证,是有效信号;
-# 出现在文件名里则几乎没有信号 —— 实测 owner 的一个仓库有 32%(8348/25687)
-# 的源文件名含这些词(token_usage.py、erc20_token_config…),按路径匹配会让
-# 每三次文件编辑就弹一次窗。位置(在 ~/.ssh 下)和命名(叫 token_utils.py)
-# 是两种强度完全不同的证据,不能套用同一条规则。
-#
-# 刻意不加两侧 \b:下划线两侧都是 \w,会把词边界吃掉,导致
-# AWS_SECRET_ACCESS_KEY / GITHUB_TOKEN 漏报。
-_CREDENTIAL_WORDS = re.compile(
-    r'(secret|secretsmanager|credential|private[_-]?key|password|token)', re.I)
+# 这是 _REDLINES['credentials'] 那条「位置 vs 命名」教训的延续:文件路径上
+# 早已撤掉关键词匹配(owner 仓库 32% 源文件名含这些词),但命令文本里最常见
+# 的东西恰恰就是文件名、分支名、变量名,所以同样的误报从命令分支溜了回来。
+# 实测:关键词版命中 owner 历史命令的 14.5%,动作版 2.6%。
+_CREDENTIAL_ACTIONS = re.compile(
+    r'export\s+\w*(SECRET|TOKEN|PASSWORD|PASSWD|APIKEY|API_KEY)\w*\s*=|'  # 往环境里塞凭证
+    r'\bsecretsmanager\b|\bvault\s+(read|kv|login)\b|'                     # 密钥服务
+    r'--(password|token|api-key|secret)[=\s]|'                             # 命令行显式传凭证
+    r'\bgh\s+auth\s+token\b|\bdocker\s+login\b|\bnpm\s+login\b|'           # 取登录凭据
+    r'\bkubectl\b[^;&|]*\bget\s+secret\b',                                 # 读集群密钥
+    re.I)
 
 
 def check_redlines(req: Request) -> str | None:
@@ -347,7 +348,7 @@ def check_redlines(req: Request) -> str | None:
     for name, rx in _REDLINES.items():
         if rx.search(text):
             return name
-    if req.kind == 'command' and _CREDENTIAL_WORDS.search(text):
+    if req.kind == 'command' and _CREDENTIAL_ACTIONS.search(text):
         return 'credentials'
     return None
 

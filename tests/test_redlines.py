@@ -52,10 +52,13 @@ class TestRedlineHits(unittest.TestCase):
             self.assertEqual(hit(cmd), "credentials", cmd)
 
     def test_credentials_underscore_env_vars(self):
-        """下划线环境变量名漏报:\\bsecret\\b 的词边界被下划线吃掉。"""
+        """下划线环境变量名漏报:\\bSECRET\\b 的词边界被下划线吃掉。
+
+        `echo $DB_PASSWORD_HASH` 不在此列 —— 只是引用变量名,不是往环境里塞
+        凭证,动作版故意不拦(这正是要修的高误报类型)。
+        """
         for cmd in ["export AWS_SECRET_ACCESS_KEY=x",
-                    "export GITHUB_TOKEN=ghp_xxx",
-                    "echo $DB_PASSWORD_HASH"]:
+                    "export GITHUB_TOKEN=ghp_xxx"]:
             self.assertEqual(hit(cmd), "credentials", cmd)
 
     def test_credentials_paths(self):
@@ -118,12 +121,12 @@ class TestRedlineMisses(unittest.TestCase):
 
 
 class TestCredentialWordsAreCommandOnly(unittest.TestCase):
-    """凭证关键词只对命令生效,不对文件路径生效。
+    """凭证动作只对命令生效,不对文件路径生效。
 
     这条约束是量出来的,不是设计偏好:按路径匹配 token/secret/password 时,
     owner 的一个仓库有 8348/25687(32%)的源文件名命中,等于每三次文件编辑
     弹一次窗。位置(在 ~/.ssh 下)和命名(叫 token_utils.py)是强度完全不同
-    的证据。若有人把关键词分支改回对路径生效,下面第二组会变红。
+    的证据。若有人把动作分支改回对路径生效,下面第二组会变红。
     """
 
     def test_keywords_still_flag_commands(self):
@@ -139,6 +142,47 @@ class TestCredentialWordsAreCommandOnly(unittest.TestCase):
                      "/Users/x/repo/secret_handoff.py"]:
             for kind in ("file_read", "file_write"):
                 self.assertIsNone(hit_path(kind, path), f"{kind} {path}")
+
+
+class TestCredentialActionsNotJustMentions(unittest.TestCase):
+    """_CREDENTIAL_ACTIONS 匹配「在操作凭证」的动作,不匹配「提到了这个词」。
+
+    关键词版(_CREDENTIAL_WORDS)命中 owner 22,896 条历史 Bash 命令的 14.5%,
+    绝大多数是误报:词来自文件名、内联假值、分支名,而不是真的在摆弄凭证。
+    动作版把命中率压到 2.6%,且下面这组真凭证操作一条不漏。
+    """
+
+    def test_still_blocks_real_credential_actions(self):
+        for cmd in [
+            "export GITHUB_TOKEN=ghp_xxx",
+            "export AWS_SECRET_ACCESS_KEY=abc",
+            "aws secretsmanager get-secret-value --secret-id x",
+            "vault read secret/foo",
+            "mysql -u root --password=hunter2",
+            "aws ecr get-login-password | docker login --username AWS --password-stdin x",
+            "gh auth token",
+            "kubectl --context prod get secret db -o yaml",
+        ]:
+            self.assertEqual(hit(cmd), "credentials", cmd)
+
+    def test_still_blocks_credential_file_by_path(self):
+        # 靠 _REDLINES['credentials'] 的路径分支命中,不是靠动作分支。
+        self.assertEqual(hit("cat ~/.aws/credentials"), "credentials")
+
+    def test_allows_real_false_positive_cases(self):
+        for cmd in [
+            "sed -n 1,60p tests/unit/test_trading_no_credential_ns.py",
+            "python -c 'AKSK={\"okx_api_key\":\"k\",\"okx_secret\":\"s\"}'",
+            "gh pr create --head feat/x-api-key-from-secret-manager",
+            "pytest tests/test_token_counter.py",
+            "grep -r secret src/",
+            "git commit -m 'add password reset form'",
+        ]:
+            self.assertIsNone(hit(cmd), cmd)
+
+    def test_source_dotenv_not_blocked(self):
+        """`.env` 只在文件名分支里保护『文件本身』,不该让 source .env 被拦。"""
+        self.assertIsNone(hit("set -a && source .env && set +a && pytest"))
 
 
 class TestCredentialFilesByName(unittest.TestCase):
