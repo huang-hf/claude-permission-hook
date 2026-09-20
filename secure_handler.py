@@ -330,7 +330,13 @@ def main():
 
     req = None
     try:
-        parse, emit = ADAPTERS['claude-code']
+        agent = 'claude-code'
+        for arg in sys.argv[1:]:
+            if arg.startswith('--agent='):
+                agent = arg.split('=', 1)[1].strip()
+        if agent not in ADAPTERS:
+            sys.exit(0)          # fail-safe:未知 agent 一律静默
+        parse, emit = ADAPTERS[agent]
         req = parse(data)
         if req is None:
             sys.exit(0)

@@ -279,5 +279,32 @@ class TestMalformedPayload(unittest.TestCase):
         self.assertEqual(audit, [])
 
 
+class TestAgentFlag(unittest.TestCase):
+    def test_explicit_claude_code_flag_matches_default(self):
+        payload = {"tool_name": "Bash", "cwd": str(Path.home()),
+                   "tool_input": {"command": "git status"}}
+        out_default, _ = run_hook(payload)
+        with tempfile.TemporaryDirectory() as td:
+            env = dict(os.environ)
+            env["SECURE_HANDLER_AUDIT_LOG"] = str(Path(td) / "a.jsonl")
+            env["SECURE_HANDLER_AI_FALLBACK"] = "0"
+            proc = subprocess.run([PY, str(HOOK), "--agent=claude-code"],
+                                  input=json.dumps(payload),
+                                  capture_output=True, text=True, env=env, timeout=30)
+        self.assertEqual(proc.stdout.strip(), out_default)
+
+    def test_unknown_agent_exits_silently(self):
+        payload = {"tool_name": "Bash", "cwd": "/tmp",
+                   "tool_input": {"command": "git status"}}
+        with tempfile.TemporaryDirectory() as td:
+            env = dict(os.environ)
+            env["SECURE_HANDLER_AUDIT_LOG"] = str(Path(td) / "a.jsonl")
+            proc = subprocess.run([PY, str(HOOK), "--agent=nope"],
+                                  input=json.dumps(payload),
+                                  capture_output=True, text=True, env=env, timeout=30)
+            self.assertEqual(proc.stdout.strip(), "")   # fail-safe:静默
+            self.assertEqual(proc.returncode, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
