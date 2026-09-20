@@ -29,6 +29,11 @@ def run_hook(payload: dict, extra_env: dict | None = None):
             input=json.dumps(payload),
             capture_output=True, text=True, env=env, timeout=30,
         )
+        # hook 的设计契约是「永远 exit 0」——静默回落也必须是 0。
+        # 不校验这一点的话,「期望静默」的用例在 hook 崩溃时同样会绿,
+        # 基线就失去了区分「正确静默」与「挂了」的能力。
+        assert proc.returncode == 0, (
+            f"hook exited {proc.returncode}, stderr={proc.stderr!r}")
         entries = []
         if log.exists():
             entries = [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines() if l.strip()]
