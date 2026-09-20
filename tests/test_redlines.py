@@ -148,6 +148,81 @@ class TestRedlineCredentialLocationsAddedForReadOpenUp(unittest.TestCase):
             self.assertEqual(hit_path("file_read", path), "credentials", path)
 
 
+class TestPathEndAnchorWorksOnCommandsAndPaths(unittest.TestCase):
+    """回归第 4 次「路径锚点套在命令文本上」的错误。
+
+    `$` 对文件路径 payload 是对的(路径本身就是整段文本),但对命令文本意味着
+    「必须在整条命令末尾」——`cat ~/.claude/settings.json | jq .` 这类管道/组合
+    用法会因此漏检。每个受影响的模式都要有「路径形式」和「命令形式(受保护片段
+    不在命令末尾)」两条用例。
+    """
+
+    # /\.claude/settings(\.local)?\.json —— 原 $ 锚定
+    def test_claude_settings_path_form(self):
+        self.assertEqual(
+            hit_path("file_read", "/Users/x/.claude/settings.json"), "credentials")
+
+    def test_claude_settings_command_form_not_at_end(self):
+        self.assertEqual(hit("cat ~/.claude/settings.json | jq .type"), "credentials")
+        self.assertEqual(
+            hit("for f in ~/.claude/settings.json …; do echo $f; done"), "credentials")
+        self.assertEqual(hit('cat "~/.claude/settings.json"'), "credentials")
+
+    # /\.config/gh/hosts\.ya?ml —— 原 $ 锚定
+    def test_gh_hosts_path_form(self):
+        self.assertEqual(
+            hit_path("file_read", "/Users/x/.config/gh/hosts.yaml"), "credentials")
+
+    def test_gh_hosts_command_form_not_at_end(self):
+        self.assertEqual(hit("cat ~/.config/gh/hosts.yml | jq ."), "credentials")
+
+    # (zsh|bash)_history —— 原 $ 锚定
+    def test_shell_history_path_form(self):
+        self.assertEqual(hit_path("file_read", "/Users/x/.zsh_history"), "credentials")
+
+    def test_shell_history_command_form_not_at_end(self):
+        self.assertEqual(hit("cat ~/.zsh_history | grep AWS_SECRET"), "credentials")
+
+    # \.tfstate(\.backup)? —— 原 $ 锚定
+    def test_tfstate_path_form(self):
+        self.assertEqual(
+            hit_path("file_read", "/Users/x/infra/terraform.tfstate"), "credentials")
+
+    def test_tfstate_command_form_not_at_end(self):
+        self.assertEqual(
+            hit("cat infra/terraform.tfstate | grep password"), "credentials")
+
+    # \.(key|p12|pfx|jks) —— 原 $ 锚定
+    def test_key_file_path_form(self):
+        self.assertEqual(hit_path("file_read", "/Users/x/certs/server.key"), "credentials")
+
+    def test_key_file_command_form_not_at_end(self):
+        self.assertEqual(hit("openssl rsa -in certs/server.key -text"), "credentials")
+
+    # 目录型 (/|$) 系列:~/.ssh、~/.config/gcloud、~/.azure、/Library/Keychains
+    def test_ssh_dir_command_form_not_at_end(self):
+        self.assertEqual(hit("tar czf backup.tar.gz ~/.ssh && echo done"), "credentials")
+
+    def test_gcloud_dir_command_form_not_at_end(self):
+        self.assertEqual(hit("cat ~/.config/gcloud/creds && echo done"), "credentials")
+
+    def test_azure_dir_command_form_not_at_end(self):
+        self.assertEqual(hit("cp ~/.azure/token.json /tmp && echo done"), "credentials")
+
+    def test_keychains_command_form_not_at_end(self):
+        self.assertEqual(
+            hit("cat /Library/Keychains/login.keychain && echo done"), "credentials")
+
+    # 反例:锚点不能放得太松,`.key` 不能吃掉 `monkey`,`settings.json` 不能吃掉
+    # `settings.jsonl`。
+    def test_no_false_positive_on_similar_names(self):
+        for cmd in ["/Users/x/repo/monkey.py",
+                    "cat keys.ts",
+                    "npm run build",
+                    "echo settings.jsonl"]:
+            self.assertIsNone(hit(cmd), cmd)
+
+
 class TestRedlineMisses(unittest.TestCase):
     """只读操作必须不被红线拦截,否则通过率会被打死。"""
 

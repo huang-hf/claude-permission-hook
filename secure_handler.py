@@ -286,6 +286,18 @@ Verdict = namedtuple('Verdict', 'decision reason layer ai backend scores elapsed
 # CORE — red lines (always ask; never auto-approved by any backend)
 # ══════════════════════════════════════════════════════════════════
 
+# 路径锚点在「命令文本」里的含义跟在「文件路径」里完全不同:文件路径本身就是
+# payload,$ 就是路径末尾;但命令文本里 payload 是整条命令,`$` 意味着"必须是整条
+# 命令的最后一个字符",于是 `cat ~/.claude/settings.json | jq .` 这种最常见的
+# 管道/组合用法直接漏过红线。用「token 结束」代替「字符串结束」:遇到空白、引号、
+# 管道、分号、& 或右括号,或者字符串真的结束了,都算一个 token 收尾。
+#
+# 这是同类错误的第 4 次(前三次分别是:关键词匹配文件路径误伤源文件名、关键词
+# 匹配命令文本误伤历史命令、`.env` 的 `(^|/)` 前缀在命令里表现随机)。教训:
+# 路径锚点(^ / $ / /)在命令文本里含义不同于文件路径,新增模式时必须同时验证
+# 「路径形式」和「命令形式(锚点不在末尾)」两种用例。
+_PATH_END = r"(?=[\s'\"|;&)]|$)"   # 字符串结尾,或 shell 里的分隔符
+
 _REDLINES = {
     'prod_infra': re.compile(
         r'\bkubectl\b.*\b(apply|delete|exec|patch|edit|scale|rollout|replace|cp|'
@@ -298,22 +310,23 @@ _REDLINES = {
         r'\baws\s+s3\s+rm\b', re.I),
     # 凭证位置。对命令和文件路径都适用 —— 路径指向凭证存放处,与它怎么被提到无关。
     'credentials': re.compile(
-        r'\bcoffer\b|/\.(ssh|aws|kube|gnupg)(/|$)|~/\.(ssh|aws|kube|gnupg)(/|$)|'
+        r'\bcoffer\b|/\.(ssh|aws|kube|gnupg)(/|' + _PATH_END + r')|'
+        r'~/\.(ssh|aws|kube|gnupg)(/|' + _PATH_END + r')|'
         r'/\.netrc\b|/\.docker/config\.json|\bid_rsa\b|\.pem\b|'
         # 补的位置型判据:读一旦放开(file_read 走 local_rules 的 read_anywhere),
         # 这些是唯一的闸门,全部按「存放位置」判定,不引入按文件名关键词的宽匹配。
-        r'/\.claude/settings(\.local)?\.json$|'      # owner 的 ANTHROPIC_AUTH_TOKEN 明文在里面
-        r'/\.config/gh/hosts\.ya?ml$|'                # GitHub token
-        r'/\.config/gcloud(/|$)|'                     # gcloud 凭证
-        r'/\.azure(/|$)|'                             # Azure token
-        r'/\.(zsh|bash)_history$|'                    # 手输过的密钥都在里面
-        r'\.tfstate(\.backup)?$|'                     # terraform state 常含明文密钥
-        r'/Library/Keychains(/|$)|'                   # macOS 钥匙串
+        r'/\.claude/settings(\.local)?\.json' + _PATH_END + r'|'  # owner 的 ANTHROPIC_AUTH_TOKEN 明文在里面
+        r'/\.config/gh/hosts\.ya?ml' + _PATH_END + r'|'            # GitHub token
+        r'/\.config/gcloud(/|' + _PATH_END + r')|'                 # gcloud 凭证
+        r'/\.azure(/|' + _PATH_END + r')|'                         # Azure token
+        r'/\.(zsh|bash)_history' + _PATH_END + r'|'                # 手输过的密钥都在里面
+        r'\.tfstate(\.backup)?' + _PATH_END + r'|'                 # terraform state 常含明文密钥
+        r'/Library/Keychains(/|' + _PATH_END + r')|'               # macOS 钥匙串
         # 按文件名判定的凭证文件。刻意用窄白名单而非泛关键词:这些名字几乎只用于
         # 存凭证,实测在 owner 的三个仓库里命中 8/22006、36/130750、74/48022
         # (均 <0.2%),不会重演关键词匹配那次 32% 的误伤。
-        r'(^|/)(\.env(\.|$)|\.git-credentials|\.npmrc|\.pypirc|\.pgpass|'
-        r'authorized_keys|kubeconfig|secrets?\.ya?ml)|\.(key|p12|pfx|jks)$', re.I),
+        r'(^|/)(\.env(\.|' + _PATH_END + r')|\.git-credentials|\.npmrc|\.pypirc|\.pgpass|'
+        r'authorized_keys|kubeconfig|secrets?\.ya?ml)|\.(key|p12|pfx|jks)' + _PATH_END, re.I),
     'destructive': re.compile(
         # rm 的 -r/-f 不一定是第一个 token(如 `rm -i -rf x`、`rm --recursive --force x`),
         # 用前瞻扫整条 rm 调用(遇 ; & | 截断,避免跨命令误伤)而不是死认第一个参数。
