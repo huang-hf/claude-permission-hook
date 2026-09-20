@@ -1050,8 +1050,8 @@ def hit(cmd):
 
 class TestRedlineHits(unittest.TestCase):
     def test_prod_infra_writes(self):
-        for cmd in ["kubectl --context xyz-prod apply -f a.yaml",
-                    "kubectl --context arena-eks rollout restart deploy/x",
+        for cmd in ["kubectl --context prod-cluster apply -f a.yaml",
+                    "kubectl --context staging-cluster rollout restart deploy/x",
                     "kubectl -n prod delete pod foo"]:
             self.assertEqual(hit(cmd), "prod_infra", cmd)
 
@@ -1071,9 +1071,9 @@ class TestRedlineMisses(unittest.TestCase):
     """只读操作必须不被红线拦截,否则通过率会被打死。"""
 
     def test_kubectl_readonly_not_blocked(self):
-        for cmd in ["kubectl --context xyz-prod get pods",
-                    "kubectl --context netmind-inference describe pod foo",
-                    "kubectl --context arena-eks logs deploy/bar"]:
+        for cmd in ["kubectl --context prod-cluster get pods",
+                    "kubectl --context inference-cluster describe pod foo",
+                    "kubectl --context staging-cluster logs deploy/bar"]:
             self.assertIsNone(hit(cmd), cmd)
 
     def test_ordinary_commands_not_blocked(self):

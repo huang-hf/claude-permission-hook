@@ -16,15 +16,15 @@ def hit_path(kind, path):
 
 class TestRedlineHits(unittest.TestCase):
     def test_prod_infra_writes(self):
-        for cmd in ["kubectl --context xyz-prod apply -f a.yaml",
-                    "kubectl --context arena-eks rollout restart deploy/x",
+        for cmd in ["kubectl --context prod-cluster apply -f a.yaml",
+                    "kubectl --context staging-cluster rollout restart deploy/x",
                     "kubectl -n prod delete pod foo"]:
             self.assertEqual(hit(cmd), "prod_infra", cmd)
 
     def test_prod_infra_verb_table_gaps(self):
         """漏报:create/uncordon/config use-context 等原动词表没覆盖的写操作。"""
         for cmd in ["kubectl create -f x.yaml",
-                    "kubectl config use-context xyz-prod",
+                    "kubectl config use-context prod-cluster",
                     "kubectl uncordon n1",
                     "kubectl attach pod/foo",
                     "kubectl expose deploy/foo --port=80",
@@ -227,10 +227,10 @@ class TestRedlineMisses(unittest.TestCase):
     """只读操作必须不被红线拦截,否则通过率会被打死。"""
 
     def test_kubectl_readonly_not_blocked(self):
-        for cmd in ["kubectl --context xyz-prod get pods",
-                    "kubectl --context netmind-inference describe pod foo",
-                    "kubectl --context arena-eks logs deploy/bar",
-                    "kubectl --context arena-eks top pods"]:
+        for cmd in ["kubectl --context prod-cluster get pods",
+                    "kubectl --context inference-cluster describe pod foo",
+                    "kubectl --context staging-cluster logs deploy/bar",
+                    "kubectl --context staging-cluster top pods"]:
             self.assertIsNone(hit(cmd), cmd)
 
     def test_ordinary_commands_not_blocked(self):
