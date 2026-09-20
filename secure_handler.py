@@ -160,7 +160,7 @@ def _ai_endpoint() -> tuple[str, str]:
     return base, token
 
 
-def ask_ai(command: str, cwd: str = '', timeout: int | None = None) -> tuple[bool, str]:
+def ask_ai(command: str, cwd: str = '') -> tuple[bool, str]:
     base_url, auth_token = _ai_endpoint()
     if not auth_token:
         return False, 'no_token'
@@ -186,12 +186,9 @@ def ask_ai(command: str, cwd: str = '', timeout: int | None = None) -> tuple[boo
             'messages': [{'role': 'user', 'content': content}],
         }).encode()
 
-    if timeout is None:
-        timeout = AI_FALLBACK_TIMEOUT
-
     req = urllib.request.Request(url, data=payload, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout,
+        with urllib.request.urlopen(req, timeout=AI_FALLBACK_TIMEOUT,
                                     context=_SSL_CTX) as resp:
             data = json.loads(resp.read())
             if AI_API_STYLE == 'openai':
@@ -376,11 +373,12 @@ TYPESAFE_QUESTIONS = {
 def backend_typesafe(req: Request) -> Verdict:
     """TypeSafe 结构化判断。
 
-    异常分两类,reason 前缀不同,决定 remote_judge 是否可以降级到旧 gateway:
-      typesafe_neterror:*  传输层故障(连不上/超时/HTTP 错误)—— 基础设施问题,
-                           可以降级去找另一家后端碰运气。
-      typesafe_badresp:*   后端连上了但返回解析不出结果 —— 后端本身有问题,
-                           直接 ask,不降级(降级等于去找一个更宽松的裁判)。
+    异常分两类,reason 前缀不同:
+      typesafe_neterror:*  传输层故障(连不上/超时/HTTP 错误)。
+      typesafe_badresp:*   后端连上了但返回解析不出结果。
+    两者都收敛到 decision='ask',不再影响控制流(backend 是二选一,不降级到
+    另一家)——这个区分现在只作为审计诊断信号保留:事后能看出 TypeSafe 是
+    连不上还是返回了垃圾,便于排查该换端点还是该联系供应商。
     """
     url = os.getenv('SECURE_HANDLER_TYPESAFE_URL',
                     'https://api.typesafe.ai/v1/systemone')
@@ -447,17 +445,9 @@ def remote_judge(req: Request) -> Verdict:
         return Verdict('no_opinion', reason, 'fallthrough')
 
     if backend == 'typesafe':
-        v = backend_typesafe(req)
-        # 只对传输类错误降级(typesafe_neterror:*)——「连不上」是基础设施问题,
-        # 换一家合理。解析类错误(typesafe_badresp:*,后端返回了垃圾)不降级,
-        # 直接 ask:此时去找更宽松的裁判是在降低安全标准,不是在容错。
-        if v.decision == 'ask' and v.reason.startswith('typesafe_neterror'):
-            if AI_FALLBACK_ENABLED:
-                is_safe, ai_raw = ask_ai(req.payload, req.cwd, timeout=4)
-                # 折进 v.reason,而不是丢弃:审计事后要能看出 TypeSafe 是否在故障。
-                return Verdict('allow' if is_safe else 'ask', f'{reason}|{v.reason}',
-                               'ai', ai_raw)
-        return v
+        # 二选一,不做链式降级:选了 typesafe 就用 typesafe,失败(无论传输层
+        # 故障还是解析出垃圾)一律 ask,不去问 ask_ai/旧 gateway 碰运气。
+        return backend_typesafe(req)
 
     if AI_FALLBACK_ENABLED:
         is_safe, ai_raw = ask_ai(req.payload, req.cwd)   # 主后端:沿用 15s
