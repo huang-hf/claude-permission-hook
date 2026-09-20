@@ -17,6 +17,23 @@
 - **fail-safe 不变量**:任何异常 / 超时 / 畸形响应 → `ask` 或静默,**永不 `allow`**。
 - **降级只因「错误」,不因「否定」**:后端判危 → 直接 ask,不再询问下一个后端。
 - **阶段一零行为变更**:Task 1–4 完成后,对任意输入的 stdout 与审计条目必须与重构前逐字节一致(时间戳除外)。
+
+  **唯一的显式例外 —— 畸形 / 空 payload 的审计条目(Task 2 review 发现,已决策):**
+
+  对「工具名可识别但 payload 为空或畸形」的输入,新旧两路的**审计**行为不同(**stdout 始终一致,均为静默**):
+
+  | 输入 | 重构前 | 重构后 |
+  |---|---|---|
+  | `tool_input: {"file_path": ""}` | 审计 `rule/outside_cwd` | 无审计条目 |
+  | `tool_input: null` | 抛 `AttributeError` → 审计 `error` | 无审计条目 |
+  | 缺 `tool_input` 字段 | 审计 `rule/outside_cwd` | 无审计条目 |
+
+  **接受新语义**,理由:
+  1. 实测频次为零 —— 全历史 42,483 条审计里 `layer='error'` 仅 1 条(0.00%,且系 2026-03 网关故障期的网络错误,非畸形输入),空 `file_path` 的文件操作 0 条。没有任何诊断信号实际被丢失。
+  2. 旧行为本身是错的 —— 把空路径记成 `outside_cwd` 是事实性错误。
+  3. 用户可见行为(stdout / 是否弹窗)完全不变。
+
+  **Task 3 必须为此新增回归用例锁定新语义**(见 Task 3 Step 5),确保它是有意为之而非意外漂移。
 - **阶段二新能力默认关闭**:`SECURE_HANDLER_BACKEND` 默认 `anthropic`,升级后行为与当前一致。
 - **env 前缀**:一律 `SECURE_HANDLER_`,不引入新前缀。
 - **工作目录**:`~/claude-permission-hook`(仓库副本);完成后需 `cp` 同步到 `~/.claude/hooks/secure_handler.py`。
@@ -585,7 +602,41 @@ def main():
 >
 > 该映射在 Task 6 引入 `no_opinion` 日志值时移除。
 
-- [ ] **Step 5: 运行全部测试**
+- [ ] **Step 5: 新增用例锁定畸形 payload 的新语义**
+
+见 Global Constraints 里那条显式例外。新语义必须被测试钉死,否则它就只是一次未被察觉的漂移。
+
+在 `tests/test_regression.py` 末尾、`if __name__` 之前加入:
+
+```python
+class TestMalformedPayload(unittest.TestCase):
+    """畸形/空 payload 的语义(Task 2 review 发现,Global Constraints 里已显式接受)。
+
+    重构前:空 file_path 会被记成 `rule/outside_cwd`,tool_input=None 会记成 `error`。
+    重构后:一律静默且不写审计。stdout 两者都是空,用户可见行为不变。
+    """
+
+    def test_empty_file_path_is_silent_and_unlogged(self):
+        out, audit = run_hook({"tool_name": "Edit", "cwd": "/tmp",
+                               "tool_input": {"file_path": ""}})
+        self.assertEqual(out, "")
+        self.assertEqual(audit, [])
+
+    def test_null_tool_input_is_silent_and_unlogged(self):
+        out, audit = run_hook({"tool_name": "Edit", "cwd": "/tmp",
+                               "tool_input": None})
+        self.assertEqual(out, "")
+        self.assertEqual(audit, [])
+
+    def test_missing_tool_input_is_silent_and_unlogged(self):
+        out, audit = run_hook({"tool_name": "Edit", "cwd": "/tmp"})
+        self.assertEqual(out, "")
+        self.assertEqual(audit, [])
+```
+
+> 这三条在 Task 3 之前会**失败**(旧路径会写审计),这是预期的——它们锁定的是 Task 3 落地后的新语义。
+
+- [ ] **Step 6: 运行全部测试**
 
 ```bash
 cd ~/claude-permission-hook && /usr/local/bin/python3.12 -m unittest discover tests -v
@@ -593,7 +644,7 @@ cd ~/claude-permission-hook && /usr/local/bin/python3.12 -m unittest discover te
 
 Expected: 全部 PASS,**回归基线尤其必须全绿**——这是「行为零变更」的证明。
 
-- [ ] **Step 6: 语法检查并提交**
+- [ ] **Step 7: 语法检查并提交**
 
 ```bash
 cd ~/claude-permission-hook
@@ -770,7 +821,9 @@ class TestEventName(unittest.TestCase):
 
 ```python
 def emit_claude_code(verdict: Verdict, event: str = 'PreToolUse') -> str | None:
-    if verdict.decision == 'no_opinion':
+    # 白名单而非黑名单(Task 2 review 的 🟡-2):只有 allow/ask 会被输出,
+    # 任何笔误或未来新增的 decision 值都静默回落,而不是被原样塞给 agent。
+    if verdict.decision not in ('allow', 'ask'):
         return None
     reason = verdict.reason
     if verdict.decision == 'ask':
