@@ -331,9 +331,15 @@ def main():
     req = None
     try:
         agent = 'claude-code'
-        for arg in sys.argv[1:]:
+        argv = sys.argv[1:]
+        for i, arg in enumerate(argv):
             if arg.startswith('--agent='):
                 agent = arg.split('=', 1)[1].strip()
+            elif arg == '--agent':
+                # 也接受空格写法 `--agent codex`。不接受的话它会被无声忽略,
+                # 从而回落到 claude-code —— 等于拿本适配器去解析别家 agent 的
+                # payload。缺少取值时给一个必定不在 ADAPTERS 里的哨兵,走静默。
+                agent = argv[i + 1].strip() if i + 1 < len(argv) else '\x00'
         if agent not in ADAPTERS:
             sys.exit(0)          # fail-safe:未知 agent 一律静默
         parse, emit = ADAPTERS[agent]

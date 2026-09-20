@@ -291,6 +291,9 @@ class TestAgentFlag(unittest.TestCase):
             proc = subprocess.run([PY, str(HOOK), "--agent=claude-code"],
                                   input=json.dumps(payload),
                                   capture_output=True, text=True, env=env, timeout=30)
+        # 两路必须相等 **且非空** —— 只断言相等的话,
+        # 将来两路同时回归成静默,这条用例照样会绿。
+        self.assertNotEqual(out_default, "")
         self.assertEqual(proc.stdout.strip(), out_default)
 
     def test_unknown_agent_exits_silently(self):
