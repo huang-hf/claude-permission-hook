@@ -45,7 +45,8 @@ AI_FALLBACK_ENABLED: bool = os.getenv('SECURE_HANDLER_AI_FALLBACK', '1') != '0'
 AI_API_STYLE: str = os.getenv('SECURE_HANDLER_AI_API', 'anthropic').strip().lower()  # anthropic | openai
 AI_FALLBACK_MODEL = os.getenv('SECURE_HANDLER_AI_MODEL', 'claude-haiku-4-5-20251001')  # lightweight & fast
 AI_FALLBACK_TIMEOUT = 15
-AUDIT_LOG_PATH = Path.home() / '.claude' / 'logs' / 'permission_audit.jsonl'
+AUDIT_LOG_PATH = Path(os.getenv('SECURE_HANDLER_AUDIT_LOG')
+                      or Path.home() / '.claude' / 'logs' / 'permission_audit.jsonl')
 
 
 # ══════════════════════════════════════════════════════════════════
