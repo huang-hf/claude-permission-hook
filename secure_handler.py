@@ -236,6 +236,46 @@ Verdict = namedtuple('Verdict', 'decision reason layer ai', defaults=(None,))
 
 
 # ══════════════════════════════════════════════════════════════════
+# CORE — decision chain
+# ══════════════════════════════════════════════════════════════════
+
+def local_rules(req: Request) -> Verdict | None:
+    """本地路径规则;不适用则返回 None。"""
+    if req.kind not in ('file_read', 'file_write'):
+        return None
+    fp_res = _resolve_path(req.payload, req.cwd)
+    cwd_res = str(Path(req.cwd).resolve()) if req.cwd else ''
+    if cwd_res and fp_res and Path(fp_res).is_relative_to(Path(cwd_res)):
+        return Verdict('allow', 'within_cwd', 'rule')
+    if fp_res and _is_git_metadata(fp_res, _git_common_dir(req.cwd)):
+        return Verdict('allow', 'git_metadata', 'rule')
+    return None
+
+
+def remote_judge(req: Request) -> Verdict:
+    """远程判断层。阶段一仅保留现有 anthropic AI 兜底行为。"""
+    action, reason = dippy_analyze(req.payload, req.cwd)
+    if action == 'allow':
+        return Verdict('allow', reason, 'dippy')
+    if AI_FALLBACK_ENABLED:
+        is_safe, ai_raw = ask_ai(req.payload, req.cwd)
+        return Verdict('allow' if is_safe else 'ask', reason, 'ai', ai_raw)
+    # 重构前此分支只写审计、不打印(交回 Claude Code 自身的默认权限提示)。
+    # decision='no_opinion' 才能让 emit_claude_code 保持静默;main() 里的
+    # 临时映射会把它记回审计里的 'ask',与基线逐字节一致。
+    return Verdict('no_opinion', reason, 'fallthrough')
+
+
+def judge(req: Request) -> Verdict:
+    """唯一判断出口。纯函数:不打印、不写日志。"""
+    if v := local_rules(req):
+        return v
+    if req.kind in ('file_read', 'file_write'):
+        return Verdict('no_opinion', 'outside_cwd', 'rule')
+    return remote_judge(req)
+
+
+# ══════════════════════════════════════════════════════════════════
 # ADAPTERS — Claude Code
 # ══════════════════════════════════════════════════════════════════
 
@@ -299,62 +339,31 @@ def main():
     except (json.JSONDecodeError, ValueError):
         sys.exit(0)
 
-    command = ''
-    tool = ''
-
+    req = None
     try:
+        parse, emit = ADAPTERS['claude-code']
+        req = parse(data)
+        if req is None:
+            sys.exit(0)
+
+        verdict = judge(req)
+
         tool = data.get('tool_name', '')
-        cwd = data.get('cwd', '')
+        # 临时映射(Task 3→Task 6 之间):no_opinion 审计仍记成 ask,
+        # 与重构前的既有行为保持一致;Task 6 引入 no_opinion 日志值后移除。
+        audit_decision = 'ask' if verdict.decision == 'no_opinion' else verdict.decision
+        write_audit(req.payload, tool, audit_decision, verdict.layer,
+                    verdict.reason, verdict.ai)
 
-        # ── Write / Edit / NotebookEdit: allow paths inside cwd ──
-        if tool in ('Read', 'Write', 'Edit', 'NotebookEdit'):
-            file_path = data.get('tool_input', {}).get('file_path', '')
-            fp_res = _resolve_path(file_path, cwd)
-            cwd_res = str(Path(cwd).resolve()) if cwd else ''
-            if cwd_res and fp_res and Path(fp_res).is_relative_to(Path(cwd_res)):
-                write_audit(file_path, tool, 'allow', 'rule', 'within_cwd')
-                print(json.dumps(allow_response('within cwd')))
-            elif fp_res and _is_git_metadata(fp_res, _git_common_dir(cwd)):
-                write_audit(file_path, tool, 'allow', 'rule', 'git_metadata')
-                print(json.dumps(allow_response('git metadata dir')))
-            else:
-                write_audit(file_path, tool, 'ask', 'rule', 'outside_cwd')
-            sys.exit(0)
-
-        if tool != 'Bash':
-            sys.exit(0)
-
-        command = data.get('tool_input', {}).get('command', '')
-        if not command:
-            sys.exit(0)
-
-        # ── Layer 1: dippy AST analysis ────────────────────────────
-        action, reason = dippy_analyze(command, cwd)
-
-        if action == 'allow':
-            write_audit(command, tool, 'allow', 'dippy', reason)
-            print(json.dumps(allow_response(reason)))
-            sys.exit(0)
-
-        # ── Layer 2: AI fallback (dippy said ask / deny) ───────────
-        if AI_FALLBACK_ENABLED:
-            is_safe, ai_raw = ask_ai(command, cwd)
-            if is_safe:
-                write_audit(command, tool, 'allow', 'ai', reason, ai_raw)
-                print(json.dumps(allow_response(f'ai:SAFE ({reason})')))
-                sys.exit(0)
-            else:
-                write_audit(command, tool, 'ask', 'ai', reason, ai_raw)
-                print(json.dumps(ask_response(reason)))
-                sys.exit(0)
-
-        # ── Fallback: back to the normal prompt ────────────────────
-        write_audit(command, tool, 'ask', 'fallthrough', reason)
+        out = emit(verdict)
+        if out:
+            print(out)
         sys.exit(0)
 
     except Exception:
         try:
-            write_audit(command, tool, 'ask', 'error')
+            write_audit(req.payload if req else '', data.get('tool_name', ''),
+                        'ask', 'error')
         except Exception:
             pass
         sys.exit(0)

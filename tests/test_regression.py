@@ -126,5 +126,30 @@ class TestBashDippy(unittest.TestCase):
         self.assertEqual(audit[0]["decision"], "ask")
 
 
+class TestMalformedPayload(unittest.TestCase):
+    """畸形/空 payload 的语义(Task 2 review 发现,Global Constraints 里已显式接受)。
+
+    重构前:空 file_path 会被记成 `rule/outside_cwd`,tool_input=None 会记成 `error`。
+    重构后:一律静默且不写审计。stdout 两者都是空,用户可见行为不变。
+    """
+
+    def test_empty_file_path_is_silent_and_unlogged(self):
+        out, audit = run_hook({"tool_name": "Edit", "cwd": "/tmp",
+                               "tool_input": {"file_path": ""}})
+        self.assertEqual(out, "")
+        self.assertEqual(audit, [])
+
+    def test_null_tool_input_is_silent_and_unlogged(self):
+        out, audit = run_hook({"tool_name": "Edit", "cwd": "/tmp",
+                               "tool_input": None})
+        self.assertEqual(out, "")
+        self.assertEqual(audit, [])
+
+    def test_missing_tool_input_is_silent_and_unlogged(self):
+        out, audit = run_hook({"tool_name": "Edit", "cwd": "/tmp"})
+        self.assertEqual(out, "")
+        self.assertEqual(audit, [])
+
+
 if __name__ == "__main__":
     unittest.main()
