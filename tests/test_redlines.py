@@ -182,6 +182,35 @@ class TestDockerRmIsNotDestructive(unittest.TestCase):
             self.assertEqual(hit(cmd), "destructive", cmd)
 
 
+class TestIrreversibleGitWorkLoss(unittest.TestCase):
+    """丢弃未提交工作成果的 git 命令。
+
+    这些 git 自己也救不回来,而且大多落在 owner 的 allow 规则里
+    (`Bash(git checkout*)`、`Bash(git stash*)`),因此只有 PreToolUse 上的
+    红线能覆盖到它们。
+    """
+
+    def test_discarding_commands_are_blocked(self):
+        for cmd in ["git checkout -- .", "git checkout -- src/", "git checkout .",
+                    "git restore .", "git restore --staged --worktree .",
+                    "git stash clear", "git stash drop", "git stash drop stash@{0}",
+                    "git branch -D feat/x", "git worktree remove --force /tmp/wt"]:
+            self.assertEqual(hit(cmd), "destructive", cmd)
+
+    def test_everyday_git_usage_is_not_blocked(self):
+        for cmd in ["git checkout main", "git checkout -b feat/x", "git checkout feat/x",
+                    "git stash", "git stash pop", "git stash list", "git stash show",
+                    "git branch -a", "git branch", "git worktree list",
+                    "git worktree add /tmp/wt -b x"]:
+            self.assertIsNone(hit(cmd), cmd)
+
+    def test_lowercase_d_deletes_merged_branches_safely(self):
+        """`-D` 强删要拦,`-d` 只删已合并分支、是安全的 —— 别被 re.I 混为一谈。"""
+        self.assertEqual(hit("git branch -D feat/x"), "destructive")
+        self.assertIsNone(hit("git branch -d merged-branch"))
+        self.assertIsNone(hit("git branch --delete merged-branch"))
+
+
 class TestRedlineWiredIntoJudge(unittest.TestCase):
     def test_redline_short_circuits_before_network(self):
         """短路必须覆盖 remote_judge 调用链上的每一跳,不只是最外层。"""

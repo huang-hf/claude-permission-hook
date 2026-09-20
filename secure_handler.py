@@ -315,6 +315,14 @@ _REDLINES = {
         r'\bgit\s+reset\b[^;&|]*\s--hard\b|'
         r'\bgit\s+clean\b[^;&|]*\s-[a-zA-Z]*f[a-zA-Z]*d[a-zA-Z]*\b|'
         r'\bgit\s+clean\b[^;&|]*\s-[a-zA-Z]*d[a-zA-Z]*f[a-zA-Z]*\b|'
+        # 不可逆丢弃「尚未提交」的工作成果 —— 这类命令 git 自己也救不回来。
+        # 它们大多落在 owner 的 Bash allow 规则里(git checkout*/git stash*),
+        # 所以只有 PreToolUse 上的红线能覆盖到,见 Global Constraints 的方案 B。
+        r'\bgit\s+checkout\b[^;&|]*(\s--\s|\s\.(\s|$))|'   # git checkout -- . / git checkout .
+        r'\bgit\s+restore\b|'                              # restore 天然就是丢弃工作区改动
+        r'\bgit\s+stash\s+(clear|drop)\b|'                 # stash 本身安全,clear/drop 不可逆
+        r'\bgit\s+branch\b[^;&|]*\s(?-i:-D)\b|'            # 仅此处区分大小写:-D 强删,-d 安全
+        r'\bgit\s+worktree\s+remove\b[^;&|]*--force|'
         r'\bdrop\s+(table|database)\b|\btruncate\b|\bdd\s+if=|\bmkfs\b', re.I),
 }
 
