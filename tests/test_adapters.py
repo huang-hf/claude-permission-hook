@@ -82,5 +82,19 @@ class TestDisplayMappingIsLayerKeyed(unittest.TestCase):
                          "ai:SAFE (sh interactive)")
 
 
+class TestEventName(unittest.TestCase):
+    def test_event_name_defaults_to_pre_tool_use(self):
+        import json
+        out = sh.emit_claude_code(sh.Verdict("allow", "ok", "rule"))
+        self.assertEqual(
+            json.loads(out)["hookSpecificOutput"]["hookEventName"], "PreToolUse")
+
+    def test_event_name_can_be_overridden(self):
+        import json
+        out = sh.emit_claude_code(sh.Verdict("allow", "ok", "rule"), event="PermissionRequest")
+        self.assertEqual(
+            json.loads(out)["hookSpecificOutput"]["hookEventName"], "PermissionRequest")
+
+
 if __name__ == "__main__":
     unittest.main()

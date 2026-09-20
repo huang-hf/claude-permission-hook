@@ -408,13 +408,16 @@ def parse_claude_code(data: dict) -> Request | None:
 _CC_RULE_DISPLAY = {'within_cwd': 'within cwd', 'git_metadata': 'git metadata dir'}
 
 
-def emit_claude_code(verdict: Verdict) -> str | None:
+def emit_claude_code(verdict: Verdict, event: str = 'PreToolUse') -> str | None:
     """把 Verdict 翻译成 Claude Code 期望的 stdout;no_opinion 返回 None(静默)。
 
     展示层:stdout 的 permissionDecisionReason 是给人看的文案,与审计里
     机器可读的 verdict.reason 刻意不同(重构前即如此,这里只是保持一致)。
+
+    白名单而非黑名单(Task 2 review 的 🟡-2):只有 allow/ask 会被输出,
+    任何笔误或未来新增的 decision 值都静默回落,而不是被原样塞给 agent。
     """
-    if verdict.decision == 'no_opinion':
+    if verdict.decision not in ('allow', 'ask'):
         return None
     reason = verdict.reason
     if verdict.decision == 'allow' and verdict.layer == 'ai':
@@ -425,7 +428,7 @@ def emit_claude_code(verdict: Verdict) -> str | None:
         reason = f'🔍 {reason}'
     return json.dumps({
         'hookSpecificOutput': {
-            'hookEventName': 'PreToolUse',
+            'hookEventName': event,
             'permissionDecision': verdict.decision,
             'permissionDecisionReason': reason,
         }
@@ -473,7 +476,7 @@ def main():
                     verdict.reason, verdict.ai,
                     hook_event=data.get('hook_event_name') if isinstance(data, dict) else None)
 
-        out = emit(verdict)
+        out = emit(verdict, data.get('hook_event_name', 'PreToolUse') if isinstance(data, dict) else 'PreToolUse')
         if out:
             print(out)
         sys.exit(0)

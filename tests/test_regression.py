@@ -309,5 +309,23 @@ class TestAgentFlag(unittest.TestCase):
             self.assertEqual(proc.returncode, 0)
 
 
+class TestHookEventNamePropagation(unittest.TestCase):
+    """端到端验证 Task 5:main() 把输入的 hook_event_name 原样传给 stdout。"""
+
+    def test_hook_event_name_from_input_is_echoed_in_stdout(self):
+        out, _ = run_hook({"tool_name": "Bash", "cwd": str(Path.home()),
+                           "tool_input": {"command": "git status"},
+                           "hook_event_name": "PermissionRequest"})
+        self.assertEqual(
+            json.loads(out)["hookSpecificOutput"]["hookEventName"], "PermissionRequest")
+
+    def test_missing_hook_event_name_defaults_to_pre_tool_use(self):
+        """无该字段的既有基线用例不受影响:仍得到默认值 'PreToolUse'。"""
+        out, _ = run_hook({"tool_name": "Bash", "cwd": str(Path.home()),
+                           "tool_input": {"command": "git status"}})
+        self.assertEqual(
+            json.loads(out)["hookSpecificOutput"]["hookEventName"], "PreToolUse")
+
+
 if __name__ == "__main__":
     unittest.main()
