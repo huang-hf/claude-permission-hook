@@ -31,6 +31,7 @@ import ssl
 import subprocess
 import sys
 import urllib.request
+from collections import namedtuple
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -221,6 +222,71 @@ def _is_git_metadata(fp_resolved: str, common_dir: str | None) -> bool:
     if os.path.basename(rel) in ('config', 'config.worktree'):
         return False   # git config files still prompt (can change hooksPath etc.)
     return True
+
+
+# ══════════════════════════════════════════════════════════════════
+# CORE types (agent-agnostic)
+# ══════════════════════════════════════════════════════════════════
+
+Request = namedtuple('Request', 'kind payload cwd')
+#   kind: 'command' | 'file_read' | 'file_write'
+Verdict = namedtuple('Verdict', 'decision reason layer ai', defaults=(None,))
+#   decision: 'allow' | 'ask' | 'no_opinion'
+#   ai: 后端原始响应,仅供审计;默认 None,因此 Verdict('allow','x','rule') 仍合法
+
+
+# ══════════════════════════════════════════════════════════════════
+# ADAPTERS — Claude Code
+# ══════════════════════════════════════════════════════════════════
+
+_CC_FILE_KINDS = {
+    'Read': 'file_read',
+    'Write': 'file_write',
+    'Edit': 'file_write',
+    'NotebookEdit': 'file_write',
+}
+
+
+def parse_claude_code(data: dict) -> Request | None:
+    """把 Claude Code 的 hook JSON 翻译成 Request;不归本 hook 管则返回 None。"""
+    tool = data.get('tool_name', '')
+    cwd = data.get('cwd', '')
+    tool_input = data.get('tool_input', {}) or {}
+
+    if tool in _CC_FILE_KINDS:
+        fp = tool_input.get('file_path', '')
+        if not fp:
+            return None
+        return Request(_CC_FILE_KINDS[tool], fp, cwd)
+
+    if tool == 'Bash':
+        cmd = tool_input.get('command', '')
+        if not cmd:
+            return None
+        return Request('command', cmd, cwd)
+
+    return None
+
+
+def emit_claude_code(verdict: Verdict) -> str | None:
+    """把 Verdict 翻译成 Claude Code 期望的 stdout;no_opinion 返回 None(静默)。"""
+    if verdict.decision == 'no_opinion':
+        return None
+    reason = verdict.reason
+    if verdict.decision == 'ask':
+        reason = f'🔍 {reason}'
+    return json.dumps({
+        'hookSpecificOutput': {
+            'hookEventName': 'PreToolUse',
+            'permissionDecision': verdict.decision,
+            'permissionDecisionReason': reason,
+        }
+    })
+
+
+ADAPTERS = {
+    'claude-code': (parse_claude_code, emit_claude_code),
+}
 
 
 # ══════════════════════════════════════════════════════════════════
