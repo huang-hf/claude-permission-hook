@@ -55,7 +55,10 @@ AUDIT_LOG_PATH = Path(os.getenv('SECURE_HANDLER_AUDIT_LOG')
 # ══════════════════════════════════════════════════════════════════
 
 def write_audit(cmd: str, tool: str, decision: str, layer: str,
-                reason: str = '', ai_response: str | None = None) -> None:
+                reason: str = '', ai_response: str | None = None,
+                backend: str | None = None, scores: dict | None = None,
+                elapsed_ms: int | None = None,
+                hook_event: str | None = None) -> None:
     try:
         AUDIT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         entry = {
@@ -69,6 +72,13 @@ def write_audit(cmd: str, tool: str, decision: str, layer: str,
             entry['cmd'] = cmd
         if ai_response is not None:
             entry['ai'] = ai_response
+        if backend is not None:
+            entry['backend'] = backend
+        if scores is not None:
+            entry['scores'] = scores
+        if elapsed_ms is not None:
+            entry['elapsed_ms'] = elapsed_ms
+        entry['hook_event_name'] = hook_event   # 可能为 None:表示输入里没有该字段
         with AUDIT_LOG_PATH.open('a', encoding='utf-8') as f:
             f.write(json.dumps(entry, ensure_ascii=False) + '\n')
     except Exception:
@@ -350,11 +360,9 @@ def main():
         verdict = judge(req)
 
         tool = data.get('tool_name', '')
-        # 临时映射(Task 3→Task 6 之间):no_opinion 审计仍记成 ask,
-        # 与重构前的既有行为保持一致;Task 6 引入 no_opinion 日志值后移除。
-        audit_decision = 'ask' if verdict.decision == 'no_opinion' else verdict.decision
-        write_audit(req.payload, tool, audit_decision, verdict.layer,
-                    verdict.reason, verdict.ai)
+        write_audit(req.payload, tool, verdict.decision, verdict.layer,
+                    verdict.reason, verdict.ai,
+                    hook_event=data.get('hook_event_name') if isinstance(data, dict) else None)
 
         out = emit(verdict)
         if out:
