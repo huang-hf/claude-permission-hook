@@ -68,7 +68,7 @@ tool call
 
    ```bash
    mkdir -p ~/.claude/hooks
-   cp secure_handler.py scoped_policy.py ~/.claude/hooks/
+   cp secure_handler.py personal_rules.py ~/.claude/hooks/
    chmod +x ~/.claude/hooks/secure_handler.py
    ```
 
@@ -136,9 +136,52 @@ path such as `~/.codex/logs/permission_audit.jsonl` (expand `~` in the shell).
 For Codex, audit `decision=ask` means the judge deferred; it does not prove a prompt
 was displayed. Keep audit files out of version control.
 
-To maintain a single policy, edit this repository's `secure_handler.py` / `scoped_policy.py`, run
-`python3.12 -m unittest discover -s tests -q`, then copy it to the shared installed
-path above (copy both Python files). There is no second copy of the policy to maintain for Codex.
+## Two code layers
+
+```text
+secure_handler.py    # Core: Claude/Codex protocols, redlines, dippy/AI, audit, fallback
+personal_rules.py    # Personal rules: which commands and temporary redirects to allow
+```
+
+To customize behavior, edit **`personal_rules.py`**. Both Claude and Codex call it
+through the same core. There is no plugin framework or package hierarchy.
+
+The personal file exposes just two entry points:
+
+- `approved_programs(command, cwd)` returns approved program names only after
+  checking the entire command, or `None` to leave the normal flow in control.
+- `redirect_rules(command)` returns dippy rules for checked output targets, or
+  an empty list to add no redirect allowances.
+
+The supplied implementation dispatches command checks in `_command()`. For example,
+to allow one exact invocation of your own CLI within configured trusted directories,
+add this branch there:
+
+```python
+if tool == 'my-cli':
+    return args == ['status', '--json']
+```
+
+The existing parser still rejects unsupported shell constructs, checks every
+command in a compound expression, and validates redirects. The core retains its
+redlines and explicit dippy restrictions. Do not approve a whole interpreter or
+shell merely to add support for one command.
+
+`scoped_policy.json` is optional **personal data** used by the supplied rules for
+directories and other scopes; it is not another code layer. Its existing filename
+and `SECURE_HANDLER_POLICY_PATH` remain compatible. The old `scoped_policy.py`
+module has been replaced by `personal_rules.py`.
+
+When migrating an existing installation, install `personal_rules.py` once and
+merge any customizations from your old `scoped_policy.py` into it. Keep the
+existing JSON unchanged and archive the old Python module. Core-only updates
+apply after this one-time migration.
+
+Run `python3.12 -m unittest discover -s tests -q` after changes. For a first install,
+copy both Python files. When updating only the core, copy just `secure_handler.py`
+to preserve your customized `personal_rules.py` and JSON data. Back up and merge
+personal-rule changes when intentionally updating that file. Hooks load the files
+on each invocation, so both clients use the same current personal rules.
 
 ### Scoped allowances
 

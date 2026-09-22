@@ -1,4 +1,13 @@
-"""Opt-in, argument-aware allowances. No shell commands or network calls are run."""
+"""Personal rules: edit this file to customize automatic approvals.
+
+Two entry points are called by secure_handler.py (the core):
+- approved_programs(command, cwd): approve a fully checked command, or return None.
+- redirect_rules(command): add allowances for checked output targets.
+
+The helpers and _command() below implement the supplied personal rule set.
+scoped_policy.json remains optional scope data, not another code layer.
+No shell commands or network calls are run by these rules.
+"""
 from __future__ import annotations
 
 import json
@@ -251,3 +260,42 @@ def approved_programs(command: str, cwd: str) -> set[str] | None:
     except Exception:
         # No opinion if parser/config is unavailable or the syntax is unsupported.
         return None
+
+
+def redirect_rules(command: str):
+    """Permit literal output paths resolving inside /tmp, including overwrites.
+
+    Add exact per-target rules to dippy rather than approving the command here.
+    The AST analyzer still checks every command, substitution and other redirect.
+    """
+    from dippy.core.config import Rule
+    from dippy.vendor.parable import parse
+
+    root = Path('/tmp').resolve()
+    pending = list(parse(command))
+    rules = []
+    seen = set()
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (list, tuple)):
+            pending.extend(node)
+            continue
+        if not hasattr(node, '__dict__') or id(node) in seen:
+            continue
+        seen.add(id(node))
+        pending.extend(vars(node).values())
+        if getattr(node, 'kind', '') != 'redirect' or getattr(node, 'op', '') not in (
+                '>', '>>', '&>', '&>>', '2>', '2>>'):
+            continue
+        target = getattr(getattr(node, 'target', None), 'value', '')
+        if len(target) >= 2 and target[0] == target[-1] and target[0] in ('"', "'"):
+            target = target[1:-1]
+        # Dynamic/escaped/glob targets are left to the existing analyzer.
+        if not target.startswith(('/tmp/', str(root) + '/')) or not re.fullmatch(
+                r'[\w /.-]+', target):
+            continue
+        resolved = Path(target).resolve()
+        if resolved != root and resolved.is_relative_to(root):
+            rules.append(Rule('allow', target, source='secure_handler:tmp_redirect'))
+    return rules
+

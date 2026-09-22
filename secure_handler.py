@@ -3,6 +3,9 @@
 secure_handler.py
 Claude Code / Codex permission hook — dippy AST analysis + AI fallback + audit log
 
+Core layer. Personal automatic-approval rules live in personal_rules.py;
+the core owns protocols, general redlines, analyzers, audit and fallback.
+
 Codex: --agent codex handles Bash PermissionRequest only. Explicit allow
 uses Codex's decision.behavior schema; all other outcomes leave normal approval
 in control. PreToolUse, apply_patch, and MCP tools are intentionally unsupported.
@@ -211,41 +214,12 @@ def ask_ai(command: str, cwd: str = '') -> tuple[bool, str]:
 # ══════════════════════════════════════════════════════════════════
 
 def _tmp_redirect_rules(command: str):
-    """Permit literal output paths resolving inside /tmp, including overwrites.
-
-    Add exact per-target rules to dippy rather than approving the command here.
-    The AST analyzer still checks every command, substitution and other redirect.
-    """
-    from dippy.core.config import Rule
-    from dippy.vendor.parable import parse
-
-    root = Path('/tmp').resolve()
-    pending = list(parse(command))
-    rules = []
-    seen = set()
-    while pending:
-        node = pending.pop()
-        if isinstance(node, (list, tuple)):
-            pending.extend(node)
-            continue
-        if not hasattr(node, '__dict__') or id(node) in seen:
-            continue
-        seen.add(id(node))
-        pending.extend(vars(node).values())
-        if getattr(node, 'kind', '') != 'redirect' or getattr(node, 'op', '') not in (
-                '>', '>>', '&>', '&>>', '2>', '2>>'):
-            continue
-        target = getattr(getattr(node, 'target', None), 'value', '')
-        if len(target) >= 2 and target[0] == target[-1] and target[0] in ('"', "'"):
-            target = target[1:-1]
-        # Dynamic/escaped/glob targets are left to the existing analyzer.
-        if not target.startswith(('/tmp/', str(root) + '/')) or not re.fullmatch(
-                r'[\w /.-]+', target):
-            continue
-        resolved = Path(target).resolve()
-        if resolved != root and resolved.is_relative_to(root):
-            rules.append(Rule('allow', target, source='secure_handler:tmp_redirect'))
-    return rules
+    """Optional personal policy; missing/broken rules add no allowances."""
+    try:
+        from personal_rules import redirect_rules
+        return redirect_rules(command)
+    except Exception:
+        return []
 
 
 def dippy_analyze(command: str, cwd: str) -> tuple[str, str]:
@@ -416,7 +390,7 @@ _CREDENTIAL_ACTIONS = re.compile(
 
 def _approved_programs(command: str, cwd: str):
     try:
-        from scoped_policy import approved_programs
+        from personal_rules import approved_programs
         return approved_programs(command, cwd)
     except Exception:
         return None

