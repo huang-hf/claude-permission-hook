@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
 secure_handler.py
-PreToolUse Hook — dippy AST analysis + AI fallback + audit log
+Claude Code / Codex permission hook — dippy AST analysis + AI fallback + audit log
+
+Codex: --agent codex handles Bash PermissionRequest only. Explicit allow
+uses Codex's decision.behavior schema; all other outcomes leave normal approval
+in control. PreToolUse, apply_patch, and MCP tools are intentionally unsupported.
 
 Flow:
 1. Write/Edit/NotebookEdit: allow paths inside cwd
@@ -26,7 +30,8 @@ Audit log: ~/.claude/logs/permission_audit.jsonl
   `decision` says what THIS hook decided, which is not the same as what the
   user saw:
     allow       -> printed an allow; the call ran without a prompt
-    ask         -> printed an ask; the user was prompted
+    ask         -> Claude adapter prints ask; Codex emits nothing and defers to
+                   normal approval. This is not proof a prompt was displayed.
     no_opinion  -> printed nothing; the agent's own rules and mode decided,
                    so the user may or may not have been prompted
   Counting `ask` as "the user was prompted" therefore overstates prompts,
@@ -573,8 +578,41 @@ def emit_claude_code(verdict: Verdict, event: str = 'PreToolUse') -> str | None:
     })
 
 
+# ══════════════════════════════════════════════════════════════════
+# ADAPTERS — Codex (Bash PermissionRequest only)
+# ══════════════════════════════════════════════════════════════════
+
+def parse_codex(data: dict) -> Request | None:
+    """Only interpret the supported Codex approval contract, never patch text."""
+    if not isinstance(data, dict):
+        return None
+    if data.get('hook_event_name') != 'PermissionRequest' or data.get('tool_name') != 'Bash':
+        return None
+    tool_input = data.get('tool_input')
+    cwd = data.get('cwd')
+    if not isinstance(tool_input, dict) or not isinstance(cwd, str) or not Path(cwd).is_absolute():
+        return None
+    command = tool_input.get('command')
+    if not isinstance(command, str) or not command.strip():
+        return None
+    return Request('command', command, cwd)
+
+
+def emit_codex(verdict: Verdict, event: str = 'PermissionRequest') -> str | None:
+    """An uncertain verdict must not approve or deny: let Codex handle it."""
+    if event != 'PermissionRequest' or verdict.decision != 'allow':
+        return None
+    return json.dumps({
+        'hookSpecificOutput': {
+            'hookEventName': 'PermissionRequest',
+            'decision': {'behavior': 'allow'},
+        }
+    })
+
+
 ADAPTERS = {
     'claude-code': (parse_claude_code, emit_claude_code),
+    'codex': (parse_codex, emit_codex),
 }
 
 

@@ -4,7 +4,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Claude Code](https://img.shields.io/badge/Claude%20Code-Hook-orange)](https://claude.com/claude-code)
 
-A smart permission gate for [Claude Code](https://claude.com/claude-code). It auto-approves
+A smart permission gate for [Claude Code](https://claude.com/claude-code), with a
+[Codex PermissionRequest adapter](#codex-installation). It auto-approves
 obviously-safe operations so you stop clicking "Yes" all day, while still prompting for
 anything risky — and it logs every decision for auditing.
 
@@ -85,6 +86,59 @@ tool call
      the AI fallback; set `SECURE_HANDLER_AI_FALLBACK=0` to skip the AI layer entirely)
 
 4. Reload: open `/hooks` once, or restart Claude Code (hook registration is read at startup).
+
+## Codex installation
+
+Codex and Claude Code can use the **same installed `secure_handler.py`**. The
+`--agent codex` flag selects the Codex protocol; omitting it preserves Claude's
+existing behavior. Both call the same `judge()` (redlines → local rules → dippy →
+configured AI/TypeSafe backend), so future policy changes apply to both clients.
+
+1. Install/update the shared script and dippy using steps 1–2 above.
+2. Merge `codex.hooks.json.template` into `~/.codex/hooks.json`, replacing
+   `<PYTHON_WITH_DIPPY>` with your interpreter's absolute path. Preserve any existing
+   hooks. The template intentionally registers only **Bash / PermissionRequest**.
+   It uses the shared script at `~/.claude/hooks/secure_handler.py`.
+3. Restart Codex and use `/hooks` in the CLI to review and trust the new hook.
+   Codex skips untrusted hooks. Hooks must be enabled; a managed policy can restrict
+   them. Avoid defining the same handler again in inline `config.toml` hooks.
+4. Launch Codex with the backend environment variables you want it to inherit.
+   Codex does **not** inherit the `env` section of Claude's `settings.json`.
+   When remote judgment is needed, missing backend credentials result in normal
+   approval, not an automatic allow. Local dippy approvals still work without keys.
+
+Use a Codex version supporting `PermissionRequest` command hooks. This integration
+was developed with CLI 0.155.1 (hooks enabled); see the
+[official hook contract](https://developers.openai.com/codex/hooks/).
+
+| Shared verdict | Codex behavior |
+|---|---|
+| `allow` | Emit `hookSpecificOutput.decision.behavior: "allow"`; approve without a prompt. |
+| `ask` / `no_opinion` / error | Emit no decision; continue Codex's normal approval flow. |
+| Unsupported event, tool, or malformed request | Emit no decision. |
+
+This is **approval automation, not interception of every operation**:
+
+- `PermissionRequest` only runs when Codex would otherwise request approval.
+  Existing allow rules and operations that need no approval do not pass through it.
+- Codex's `PreToolUse` does not currently support `permissionDecision: "ask"`.
+  The adapter deliberately ignores that event; it cannot reproduce Claude's
+  redline-forces-a-prompt behavior for already-allowed commands.
+- `apply_patch` (including its `Edit`/`Write` aliases), MCP calls, and other tools
+  are left to Codex. Patch text is never passed to the shell-command judge.
+- A conflicting hook denial wins over this hook's approval. Other Codex policies
+  still apply. Do not disable the sandbox or use approval bypass mode to install it.
+
+The default audit file is shared with Claude:
+`~/.claude/logs/permission_audit.jsonl`. To separate Codex records, set
+`SECURE_HANDLER_AUDIT_LOG` in its hook command or launch environment to an absolute
+path such as `~/.codex/logs/permission_audit.jsonl` (expand `~` in the shell).
+For Codex, audit `decision=ask` means the judge deferred; it does not prove a prompt
+was displayed. Keep audit files out of version control.
+
+To maintain a single policy, edit this repository's `secure_handler.py`, run
+`python3.12 -m unittest discover -s tests -q`, then copy it to the shared installed
+path above. There is no second copy of the policy to maintain for Codex.
 
 ## Config
 
