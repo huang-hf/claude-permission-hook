@@ -305,3 +305,19 @@ used by worktrees are handled explicitly.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## TypeSafe risk policy
+
+With `SECURE_HANDLER_BACKEND=typesafe`, the hook asks only three questions:
+
+| Risk | Ask for approval when |
+| --- | --- |
+| Irreversible deletion or overwrite | Score >= 0.2 |
+| Downloading and executing unreviewed code | Score >= 0.2 |
+| Changing system configuration or installed software | Score >= 0.2 |
+
+All three scores must be below the threshold to allow. Modifying files outside
+of the project and data exfiltration are no longer TypeSafe scoring questions.
+Unexpected extra answers are ignored; missing or invalid required scores still
+require approval. Core local redlines remain in effect before remote judgment.
+`SECURE_HANDLER_THRESHOLD` can override the shared threshold (default `0.2`).

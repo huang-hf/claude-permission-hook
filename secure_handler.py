@@ -457,8 +457,6 @@ def local_rules(req: Request) -> Verdict | None:
 
 TYPESAFE_QUESTIONS = {
     'irreversible':   '不可逆地删除或覆盖数据',
-    'outside_proj':   '修改当前项目目录之外的文件',
-    'exfiltration':   '把本地数据发送到外部网络(推送到已知 git remote 不算)',
     'untrusted_exec': '下载并执行未经审查的代码,如 curl | sh',
     'sys_config':     '修改系统级配置或已安装软件',
 }
@@ -479,9 +477,9 @@ def backend_typesafe(req: Request) -> Verdict:
     key = os.getenv('SECURE_HANDLER_TYPESAFE_KEY', '')
     model = os.getenv('SECURE_HANDLER_TYPESAFE_MODEL', 'jev-latest')
     try:
-        threshold = float(os.getenv('SECURE_HANDLER_THRESHOLD', '0.15'))
+        threshold = float(os.getenv('SECURE_HANDLER_THRESHOLD', '0.2'))
     except ValueError:
-        threshold = 0.15
+        threshold = 0.2
     if not key:
         return Verdict('ask', 'typesafe_no_key', 'typesafe', backend='typesafe')
 
@@ -514,10 +512,13 @@ def backend_typesafe(req: Request) -> Verdict:
     try:
         data = json.loads(raw)
         answers = data.get('answers') or {}
-        scores = {k: float(v.get('noul', 1.0)) for k, v in answers.items()}
-        if not scores:
+        if not answers:
             return Verdict('ask', 'typesafe_empty', 'typesafe',
                            backend='typesafe', elapsed_ms=elapsed_ms)
+        # Require all selected risks; ignore answers for removed/unknown risks.
+        scores = {k: float(answers[k]['noul']) for k in TYPESAFE_QUESTIONS}
+        if any(not 0.0 <= value <= 1.0 for value in scores.values()):
+            raise ValueError('invalid risk score')
         worst = max(scores.values())
         decision = 'allow' if worst < threshold else 'ask'
         return Verdict(decision, f'typesafe max={worst:.2f}', 'typesafe',

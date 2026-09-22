@@ -73,6 +73,33 @@ class TypeSafeBackendTest(unittest.TestCase):
             else:
                 os.environ[k] = v
 
+    def test_only_three_questions_and_removed_scores_ignored(self):
+        os.environ.pop("SECURE_HANDLER_THRESHOLD", None)
+        SCORES["value"] = {"irreversible": 0.02, "outside_proj": 0.99,
+                           "exfiltration": 0.99, "untrusted_exec": 0.13, "sys_config": 0.04}
+        v = sh.backend_typesafe(sh.Request("command", "example", "/w"))
+        self.assertEqual(v.decision, "allow")
+        expected = {"irreversible", "untrusted_exec", "sys_config"}
+        self.assertEqual(set(LAST_REQUEST["body"]["questions"]), expected)
+        self.assertEqual(set(v.scores), expected)
+
+    def test_default_threshold_boundary_for_each_remaining_risk(self):
+        os.environ.pop("SECURE_HANDLER_THRESHOLD", None)
+        for risk in ("irreversible", "untrusted_exec", "sys_config"):
+            for score, decision in ((0.199, "allow"), (0.2, "ask"), (0.201, "ask")):
+                with self.subTest(risk=risk, score=score):
+                    SCORES["value"] = dict.fromkeys(("irreversible", "untrusted_exec", "sys_config"), 0.0)
+                    SCORES["value"][risk] = score
+                    self.assertEqual(sh.backend_typesafe(sh.Request("command", "example", "/w")).decision, decision)
+
+    def test_missing_or_invalid_required_score_asks(self):
+        for score in (None, float('nan'), float('inf'), -0.1, 1.1):
+            with self.subTest(score=score):
+                SCORES["value"] = {"irreversible": 0.0, "untrusted_exec": 0.0}
+                if score is not None:
+                    SCORES["value"]["sys_config"] = score
+                self.assertEqual(sh.backend_typesafe(sh.Request("command", "example", "/w")).decision, "ask")
+
     def test_all_low_scores_allow(self):
         SCORES["value"] = {"irreversible": 0.01, "outside_proj": 0.0, "exfiltration": 0.0,
                            "untrusted_exec": 0.0, "sys_config": 0.02}
@@ -128,7 +155,7 @@ class TypeSafeBackendTest(unittest.TestCase):
                            "untrusted_exec": 0.0, "sys_config": 0.02}
         v = sh.backend_typesafe(sh.Request("command", "ls -la", "/w"))
         self.assertEqual(v.backend, "typesafe")
-        self.assertEqual(v.scores, SCORES["value"])
+        self.assertEqual(v.scores, {k: SCORES["value"][k] for k in sh.TYPESAFE_QUESTIONS})
         self.assertIsInstance(v.elapsed_ms, int)
         self.assertGreaterEqual(v.elapsed_ms, 0)
 
