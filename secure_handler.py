@@ -52,6 +52,8 @@ Audit log: ~/.claude/logs/permission_audit.jsonl
 
 from __future__ import annotations
 
+import argparse
+import importlib.util
 import json
 import os
 import re
@@ -64,6 +66,7 @@ import urllib.request
 from collections import namedtuple
 from datetime import datetime, timezone
 from pathlib import Path
+from functools import lru_cache
 
 # Verify certificates by default; set SECURE_HANDLER_INSECURE_TLS=1 to skip (local MITM proxies)
 #
@@ -213,11 +216,29 @@ def ask_ai(command: str, cwd: str = '') -> tuple[bool, str]:
 # dippy AST analysis
 # ══════════════════════════════════════════════════════════════════
 
+_PERSONAL_RULE_PATH = Path(__file__).resolve().with_name('personal_rules.py')
+
+
+@lru_cache(maxsize=1)
+def _load_personal_rules(path: Path):
+    """Load the selected file once per hook process, independent of cwd imports."""
+    spec = importlib.util.spec_from_file_location('_secure_handler_personal_rules', path)
+    if spec is None or spec.loader is None:
+        raise ValueError('Cannot load personal rule file')
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
+    return module
+
+
 def _tmp_redirect_rules(command: str):
     """Optional personal policy; missing/broken rules add no allowances."""
     try:
-        from personal_rules import redirect_rules
-        return redirect_rules(command)
+        return _load_personal_rules(_PERSONAL_RULE_PATH).redirect_rules(command)
     except Exception:
         return []
 
@@ -390,8 +411,7 @@ _CREDENTIAL_ACTIONS = re.compile(
 
 def _approved_programs(command: str, cwd: str):
     try:
-        from personal_rules import approved_programs
-        return approved_programs(command, cwd)
+        return _load_personal_rules(_PERSONAL_RULE_PATH).approved_programs(command, cwd)
     except Exception:
         return None
 
@@ -657,7 +677,22 @@ ADAPTERS = {
 # Main flow
 # ══════════════════════════════════════════════════════════════════
 
+class _HookArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise ValueError(message)
+
+
 def main():
+    global _PERSONAL_RULE_PATH
+    parser = _HookArgumentParser(description='Shared Claude/Codex permission hook')
+    parser.add_argument('--agent', default='claude-code', help='claude-code (default) or codex')
+    parser.add_argument('--rule', default=str(Path(__file__).resolve().with_name('personal_rules.py')),
+                        help='Personal Python rule file (default: personal_rules.py beside this script)')
+    try:
+        args = parser.parse_args()
+        _PERSONAL_RULE_PATH = Path(args.rule).expanduser().resolve()
+    except (ValueError, OSError):
+        sys.exit(0)
     try:
         data = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
@@ -665,16 +700,7 @@ def main():
 
     req = None
     try:
-        agent = 'claude-code'
-        argv = sys.argv[1:]
-        for i, arg in enumerate(argv):
-            if arg.startswith('--agent='):
-                agent = arg.split('=', 1)[1].strip()
-            elif arg == '--agent':
-                # 也接受空格写法 `--agent codex`。不接受的话它会被无声忽略,
-                # 从而回落到 claude-code —— 等于拿本适配器去解析别家 agent 的
-                # payload。缺少取值时给一个必定不在 ADAPTERS 里的哨兵,走静默。
-                agent = argv[i + 1].strip() if i + 1 < len(argv) else '\x00'
+        agent = args.agent
         if agent not in ADAPTERS:
             sys.exit(0)          # fail-safe:未知 agent 一律静默
         parse, emit = ADAPTERS[agent]

@@ -143,6 +143,28 @@ secure_handler.py    # Core: Claude/Codex protocols, redlines, dippy/AI, audit, 
 personal_rules.py    # Personal rules: which commands and temporary redirects to allow
 ```
 
+Run with the default personal rules beside the core script:
+
+```bash
+python3 secure_handler.py
+python3 secure_handler.py --agent codex
+```
+
+Or select your own rule file (any filename is supported):
+
+```bash
+python3 secure_handler.py --rule personal_rule.py
+python3 secure_handler.py --agent codex --rule ~/.claude/hooks/my_rules.py
+```
+
+`--rule` defaults to `personal_rules.py` in the **core script's directory**.
+An explicit relative path is resolved from the process working directory; use
+an absolute path in hook configuration. `--rule=PATH` is also supported.
+The selected file replaces the default personal rules and exposes the same two
+functions below. It is executable Python code, so select your own trusted file.
+A missing or broken file adds no personal allowances. Existing hook commands
+continue to work without changes. Use `--help` to see the options.
+
 To customize behavior, edit **`personal_rules.py`**. Both Claude and Codex call it
 through the same core. There is no plugin framework or package hierarchy.
 
