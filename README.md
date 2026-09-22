@@ -142,6 +142,14 @@ path above. There is no second copy of the policy to maintain for Codex.
 
 ## Config
 
+Output redirection to literal paths inside `/tmp/` is allowed by default,
+including creation, overwrite (`>`), and append (`>>`). On macOS this also covers
+the resolved `/private/tmp/` path. The target is resolved before allowing it;
+symlinks or `..` that lead outside the temporary directory do not get this
+allowance. Dynamic targets remain subject to normal analysis. Explicit dippy
+redirect rules take precedence. This only allows the output target: all commands,
+other redirects, and the script's redlines still undergo their existing checks.
+
 | Env var | Default | Meaning |
 |---|---|---|
 | `ANTHROPIC_AUTH_TOKEN` | — | Token for the AI fallback call. No token → AI fallback is skipped. |
