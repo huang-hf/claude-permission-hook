@@ -2,9 +2,19 @@
   "_comment": "Copy the relevant parts into your ~/.claude/settings.json. Replace all <PLACEHOLDER> values. NEVER commit your real settings.json.",
 
   "env": {
-    "ANTHROPIC_AUTH_TOKEN": "<YOUR_ANTHROPIC_TOKEN>",
-    "ANTHROPIC_BASE_URL": "<YOUR_ANTHROPIC_BASE_URL_OR_https://api.anthropic.com>",
-    "_comment_env_opts": "Optional: SECURE_HANDLER_AI_API=openai (OpenAI-compatible gateway), SECURE_HANDLER_AI_MODEL=<model>, SECURE_HANDLER_INSECURE_TLS=1 (only for local MITM proxy; verification is ON by default)"
+    "_comment_backend": "SECURE_HANDLER_BACKEND selects the Bash judgment backend dippy defers to: anthropic (default) | typesafe | off. Backends are mutually exclusive, not chained.",
+    "SECURE_HANDLER_BACKEND": "anthropic",
+
+    "_comment_anthropic": "Used when SECURE_HANDLER_BACKEND=anthropic. Prefer the SECURE_HANDLER_AI_* pair to keep this hook's credentials decoupled from your main conversation's; ANTHROPIC_AUTH_TOKEN/ANTHROPIC_BASE_URL are only used as a fallback pair if SECURE_HANDLER_AI_BASE_URL is unset.",
+    "SECURE_HANDLER_AI_BASE_URL": "<YOUR_AI_BASE_URL_OR_https://api.anthropic.com>",
+    "SECURE_HANDLER_AI_KEY": "<YOUR_AI_KEY>",
+    "_comment_ai_opts": "Optional: SECURE_HANDLER_AI_FALLBACK=0 (disable, dippy-only), SECURE_HANDLER_AI_API=openai (OpenAI-compatible gateway, default anthropic), SECURE_HANDLER_AI_MODEL=<model> (default claude-haiku-4-5-20251001)",
+
+    "_comment_typesafe": "Used when SECURE_HANDLER_BACKEND=typesafe. Calibrate with calibrate_threshold.py before relying on it — see README.",
+    "SECURE_HANDLER_TYPESAFE_KEY": "<YOUR_TYPESAFE_KEY>",
+    "_comment_typesafe_opts": "Optional: SECURE_HANDLER_TYPESAFE_URL=<url> (default https://api.typesafe.ai/v1/systemone), SECURE_HANDLER_TYPESAFE_MODEL=<model> (default jev-latest), SECURE_HANDLER_THRESHOLD=<0-1> (default 0.15), SECURE_HANDLER_TYPESAFE_TIMEOUT=<seconds> (default 6)",
+
+    "_comment_misc": "Optional: SECURE_HANDLER_AUDIT_LOG=<path> (default ~/.claude/logs/permission_audit.jsonl), SECURE_HANDLER_INSECURE_TLS=1 (only for local MITM proxy; verification is ON by default)"
   },
 
   "hooks": {
@@ -14,7 +24,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "<PYTHON_WITH_DIPPY> ~/.claude/hooks/secure_handler.py"
+            "command": "<PYTHON_WITH_DIPPY> ~/.claude/hooks/secure_handler.py --agent claude-code"
           }
         ]
       }
@@ -25,7 +35,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "<PYTHON_WITH_DIPPY> ~/.claude/hooks/secure_handler.py"
+            "command": "<PYTHON_WITH_DIPPY> ~/.claude/hooks/secure_handler.py --agent claude-code"
           }
         ]
       }
