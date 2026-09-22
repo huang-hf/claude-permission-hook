@@ -205,16 +205,28 @@ to preserve your customized `personal_rules.py` and JSON data. Back up and merge
 personal-rule changes when intentionally updating that file. Hooks load the files
 on each invocation, so both clients use the same current personal rules.
 
+### Global personal allowance: lark-cli
+
+The supplied personal rules allow **all `lark-cli` subcommands**, including reads,
+creates, updates, deletes, authentication, and future subcommands. This applies
+in any working directory and does not require `scoped_policy.json`.
+
+The executable must be the literal `lark-cli` command. The entire shell command
+is still checked: extra programs need their own approval, shell substitutions
+are not covered, and output redirects retain the existing temporary-path checks.
+Core redlines and explicit dippy ask/deny rules still apply. This rule changes
+approval decisions; it does not execute Lark operations itself.
+
 ### Scoped allowances
 
 Copy `scoped_policy.json.template` to `~/.claude/hooks/scoped_policy.json` and fill
-in your approved scopes. Its empty defaults enable nothing. Override the location
+in your approved scopes. Its empty defaults enable no project-scoped allowances. Override the location
 with `SECURE_HANDLER_POLICY_PATH` if needed. Both clients read the same file on
 each invocation. Keep this personal configuration out of Git.
 
 | Setting | Scope |
 |---|---|
-| `trusted_roots` | Absolute project directories (or `~/...`), including their descendants. Required for every new allowance. |
+| `trusted_roots` | Absolute project directories (or `~/...`), including their descendants. Required for project-scoped allowances; `lark-cli` is independent of this setting. |
 | `python_executables` | Exact interpreter names/paths allowed for `-m unittest` and loopback-only `-m http.server`. |
 | `http_read_endpoints` | HTTPS GET/HEAD endpoints. A trailing `/` allows that path subtree; otherwise the URL path must match exactly. Downloads can write only to `/tmp`. |
 | `clone_sources` | Exact Git clone URLs; an explicit destination inside cwd is required. |
@@ -223,7 +235,7 @@ each invocation. Keep this personal configuration out of Git.
 | `aws_regions`, `ecr_repositories` | Regions and repositories for the wrapped `aws ecr describe-images` call. |
 
 Within trusted directories this also allows ordinary `git add`/`git commit -m`,
-`lark-cli docs +fetch`, and `code` opening local paths. Git hooks and unittest
+and `code` opening local paths. Git hooks and unittest
 execute code belonging to the trusted project. Configure project roots accordingly.
 Git push/merge/amend, deployment restarts, secret reads, document writes, arbitrary
 Python/shell scripts, uploads, unknown options and dynamic shell expansions do not

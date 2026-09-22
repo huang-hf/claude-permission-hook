@@ -52,7 +52,6 @@ class ScopedPolicyTest(unittest.TestCase):
             "curl 'https://docs.example.com/codex/../admin' -o /tmp/result",
             "curl 'https://docs.example.com/codex/%2e%2e/admin' -o /tmp/result",
             "curl 'https://docs.example.com/codex/{../admin,help}' -o /tmp/result",
-            'lark-cli docs +update --doc example --content changed',
             'kubectl --context test-cluster rollout restart deployment/api-proxy-test',
             'kubectl --context test-cluster get secrets -o yaml',
             'kubectl --context test-cluster get pods,secrets',
@@ -75,6 +74,38 @@ class ScopedPolicyTest(unittest.TestCase):
         ]
         import personal_rules
         for cmd in commands:
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(personal_rules.approved_programs(cmd, self.cwd))
+
+    def test_all_lark_subcommands_without_project_scope_or_json(self):
+        commands = [
+            'lark-cli', 'lark-cli --help', 'lark-cli auth login',
+            'lark-cli docs +update --doc example --content changed',
+            'lark-cli im +send --chat-id example --text hello',
+            'lark-cli drive delete --file-token example',
+            'lark-cli future-command --new-option value',
+            'lark-cli docs +fetch --doc example > /tmp/lark-result.json',
+        ]
+        for config in ('{}', '{invalid', None):
+            if config is None:
+                self.config_path.unlink()
+            else:
+                self.config_path.write_text(config)
+            for cmd in commands:
+                with self.subTest(config=config, cmd=cmd):
+                    self.assertEqual(self.judge(cmd, '/untrusted').decision, 'allow')
+
+    def test_lark_does_not_approve_other_executables_or_shell_expansions(self):
+        import personal_rules
+        for cmd in (
+            'lark-cli --help; unknown-command',
+            'lark-cli --help && git push origin main',
+            'lark-cli --help | sh',
+            'lark-cli docs +update --content "$(touch /tmp/lark-test)"',
+            'lark-cli --help > /etc/lark-result',
+            '/tmp/lark-cli --help',
+            'lark-cli-fake --help',
+        ):
             with self.subTest(cmd=cmd):
                 self.assertIsNone(personal_rules.approved_programs(cmd, self.cwd))
 

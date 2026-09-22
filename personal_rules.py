@@ -205,9 +205,8 @@ def _command(words, cwd, policy):
     tool, args = words[0], words[1:]
     if tool == 'curl':
         return _curl(args, policy)
-    if tool == 'lark-cli' and args[:2] == ['docs', '+fetch']:
-        opts, pos = _options(args[2:], ('--doc', '--as', '--scope', '--keyword', '--detail', '--start-block-id', '--end-block-id'))
-        return not pos and bool(opts.get('--doc')) and opts.get('--as', 'user') in ('user', 'bot')
+    if tool == 'lark-cli':
+        return True
     if tool == 'kubectl':
         return _kubectl(args, policy)
     if tool == 'coffer':
@@ -223,20 +222,27 @@ def _command(words, cwd, policy):
 
 
 def approved_programs(command: str, cwd: str) -> set[str] | None:
-    """Return programs only when the entire static command fits opted-in scopes."""
+    """Approve static lark-cli commands globally; other programs require scopes."""
     try:
         from dippy.vendor.parable import parse
-        config = Path(os.getenv('SECURE_HANDLER_POLICY_PATH') or Path(__file__).with_name('scoped_policy.json'))
-        policy = json.loads(config.read_text())
-        if not isinstance(policy, dict) or any(
-                not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value)
-                for value in policy.values()):
-            return None
-        if any(not Path(root).expanduser().is_absolute() for root in policy.get('trusted_roots', [])):
-            return None
+        # Global personal allowances do not require project scope data.
+        policy = {}
+        trusted = False
         directory = Path(cwd).resolve()
-        if not Path(cwd).is_absolute() or not any(directory.is_relative_to(Path(root).expanduser().resolve()) for root in policy.get('trusted_roots', [])):
-            return None
+        try:
+            config = Path(os.getenv('SECURE_HANDLER_POLICY_PATH') or Path(__file__).with_name('scoped_policy.json'))
+            candidate = json.loads(config.read_text())
+            if not isinstance(candidate, dict) or any(
+                    not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value)
+                    for value in candidate.values()):
+                raise ValueError('invalid scope data')
+            roots = [Path(root).expanduser() for root in candidate.get('trusted_roots', [])]
+            if any(not root.is_absolute() for root in roots):
+                raise ValueError('relative trusted root')
+            trusted = Path(cwd).is_absolute() and any(directory.is_relative_to(root.resolve()) for root in roots)
+            policy = candidate
+        except (OSError, ValueError, TypeError):
+            pass
         pending = list(parse(command))
         programs = set()
         while pending:
@@ -250,7 +256,9 @@ def approved_programs(command: str, cwd: str) -> set[str] | None:
             if kind != 'command':
                 return None
             words = [_literal(word) for word in node.words]
-            if not words or not _command(words, directory, policy):
+            if not words or (words[0] != 'lark-cli' and not trusted):
+                return None
+            if not _command(words, directory, policy):
                 return None
             for redir in node.redirects:
                 if redir.kind != 'redirect' or redir.op not in ('>', '>>', '&>', '&>>', '2>', '2>>') or not _tmp(_literal(redir.target)):
