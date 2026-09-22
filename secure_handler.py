@@ -256,12 +256,16 @@ def dippy_analyze(command: str, cwd: str) -> tuple[str, str]:
     """
     try:
         from dippy.core.analyzer import analyze
-        from dippy.core.config import load_config
+        from dippy.core.config import load_config, Rule
         cwd_path = Path(cwd) if cwd else Path.home()
         config = load_config(cwd_path)
         # Dippy uses the last matching redirect rule, so explicit user/project
         # rules retain precedence over this default temporary-file allowance.
         config.redirect_rules = _tmp_redirect_rules(command) + config.redirect_rules
+        programs = _approved_programs(command, cwd)
+        if programs:
+            config.rules = [Rule('allow', name, source='secure_handler:scoped_policy')
+                            for name in sorted(programs)] + config.rules
         result = analyze(command, config, cwd_path)
         return result.action, result.reason
     except Exception as e:
@@ -410,11 +414,25 @@ _CREDENTIAL_ACTIONS = re.compile(
     re.I)
 
 
+def _approved_programs(command: str, cwd: str):
+    try:
+        from scoped_policy import approved_programs
+        return approved_programs(command, cwd)
+    except Exception:
+        return None
+
+
 def check_redlines(req: Request) -> str | None:
     """命中返回类别名,否则 None。刻意做宽:误报只多弹一次窗,漏报可能放行危险命令。"""
     text = req.payload or ''
+    approved = _approved_programs(text, req.cwd) if req.kind == 'command' else None
     for name, rx in _REDLINES.items():
-        if rx.search(text):
+        if name == 'prod_infra' and approved:
+            # The scoped parser verified all actual subcommands. Resource names
+            # such as api-proxy-test must not trigger the legacy word regex.
+            continue
+        candidate = re.sub(r'\bcoffer\b', '', text) if name == 'credentials' and approved else text
+        if rx.search(candidate):
             return name
     if req.kind == 'command' and _CREDENTIAL_ACTIONS.search(text):
         return 'credentials'
@@ -520,6 +538,10 @@ def remote_judge(req: Request) -> Verdict:
     action, reason = dippy_analyze(req.payload, req.cwd)
     if action == 'allow':
         return Verdict('allow', reason, 'dippy')
+    if _approved_programs(req.payload, req.cwd):
+        # Scoped rules are a default only. Do not let remote AI overrule a
+        # stricter dippy decision on a command otherwise covered by this policy.
+        return Verdict('ask', reason, 'scoped_policy')
 
     backend = os.getenv('SECURE_HANDLER_BACKEND', 'anthropic').strip().lower()
     if backend == 'off':

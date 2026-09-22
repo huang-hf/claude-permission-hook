@@ -2,6 +2,7 @@
 settings.json
 settings.local.json
 *.local.json
+scoped_policy.json
 
 # Audit log = full shell command history (highly sensitive)
 logs/

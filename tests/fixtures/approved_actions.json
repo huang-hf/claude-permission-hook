@@ -1,0 +1,106 @@
+[
+  {
+    "sample": 1,
+    "command": "python3 -m http.server 8765 --bind 127.0.0.1"
+  },
+  {
+    "sample": 3,
+    "command": "git add scripts/generate_database_sql_from_yaml.py service/litellm_proxy/config_builder.py test/test_systemone_api_style_plumbing.py && git commit -m \"feat(systemone): exclude native protocols from chat deployments\""
+  },
+  {
+    "sample": 6,
+    "command": "git clone git@github.com:example/permission-hook.git claude-permission-hook"
+  },
+  {
+    "sample": 7,
+    "command": "/usr/local/bin/python3.12 -m unittest discover -s tests -q"
+  },
+  {
+    "sample": 12,
+    "command": "curl -L --max-time 20 -s https://docs.example.com/codex/cli/reference/ -o /tmp/codex-cli-reference.html"
+  },
+  {
+    "sample": 14,
+    "command": "curl -fsSL --max-time 20 https://docs.example.com/codex/skills/ -o /tmp/codex-skills-official.html"
+  },
+  {
+    "sample": 20,
+    "command": "curl -fsSL --max-time 20 'https://api.example.com/model/list?query_string=typesafe' -o /tmp/typesafe-dev-model-list.json"
+  },
+  {
+    "sample": 21,
+    "command": "lark-cli docs +fetch --doc doc-example --as user --scope keyword --keyword 'model-channel|绑定|API Key' --detail full > /tmp/channel-lark-before.json"
+  },
+  {
+    "sample": 26,
+    "command": "lark-cli docs +fetch --doc doc-example --as user --scope section --start-block-id block-example --detail full > /tmp/channel-lark-binding.json"
+  },
+  {
+    "sample": 28,
+    "command": "lark-cli docs +fetch --doc doc-example --as user --scope keyword --keyword 'member_price|Pro|会员' --detail full > /tmp/channel-lark-member.json"
+  },
+  {
+    "sample": 29,
+    "command": "coffer run --global --ns=test-scope aws ecr describe-images --region us-west-2 --repository-name model-inference-proxy --image-ids imageTag=test_latest --query 'imageDetails[0].{digest:imageDigest,pushedAt:imagePushedAt}' --output json"
+  },
+  {
+    "sample": 30,
+    "command": "coffer run --global --ns=test-scope kubectl --context test-cluster -n test-namespace get deployment inference-proxy-test -o jsonpath='{.metadata.name}{\"\\n\"}{range .spec.template.spec.containers[*]}{.name}{\" \"}{.image}{\" \"}{.imagePullPolicy}{\"\\n\"}{end}{.spec.selector.matchLabels}{\"\\n\"}{.status.readyReplicas}{\"/\"}{.spec.replicas}{\"\\n\"}'"
+  },
+  {
+    "sample": 32,
+    "command": "/usr/local/bin/python3.12 -m unittest discover -s tests -q"
+  },
+  {
+    "sample": 33,
+    "command": "coffer run --global --ns=test-scope kubectl --context test-cluster get deployments --all-namespaces -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,IMAGE:.spec.template.spec.containers[*].image,READY:.status.readyReplicas,DESIRED:.spec.replicas'"
+  },
+  {
+    "sample": 34,
+    "command": "lark-cli docs +fetch --doc doc-example --as user --scope range --start-block-id block-example --end-block-id block-example --detail full > /tmp/channel-lark-verified.json"
+  },
+  {
+    "sample": 35,
+    "command": "coffer run --global --ns=test-scope kubectl --context test-cluster get deployments --all-namespaces -o jsonpath='{range .items[*]}{.metadata.namespace}{\" \"}{.metadata.name}{\" \"}{range .spec.template.spec.containers[*]}{.name}{\"=\"}{.image}{\" pull=\"}{.imagePullPolicy}{\" \"}{end}{\"\\n\"}{end}' > /tmp/typesafe-deployments.txt"
+  },
+  {
+    "sample": 37,
+    "command": "coffer run --global --ns=test-scope kubectl --context test-cluster --namespace=test-namespace get deployment/inference-proxy-test -o jsonpath='{.metadata.uid}{\"\\n\"}{.spec.selector.matchLabels}{\"\\n\"}{range .spec.template.spec.containers[*]}{.name}{\" \"}{.image}{\" \"}{.imagePullPolicy}{\"\\n\"}{end}{.status.readyReplicas}{\"/\"}{.spec.replicas}{\"\\n\"}'"
+  },
+  {
+    "sample": 39,
+    "command": "/usr/local/bin/python3.12 -m unittest discover -s tests -q"
+  },
+  {
+    "sample": 40,
+    "command": "git add docs/superpowers/specs/2026-09-22-watcher-runner-design.md"
+  },
+  {
+    "sample": 42,
+    "command": "git add docs/superpowers/specs/2026-09-22-watcher-runner-design.md"
+  },
+  {
+    "sample": 43,
+    "command": "coffer run --global --ns=test-scope kubectl --context test-cluster --namespace=test-namespace rollout status deployment/inference-proxy-test --timeout=45s"
+  },
+  {
+    "sample": 45,
+    "command": "git commit -m 'feat: document generic watcher and runner design'"
+  },
+  {
+    "sample": 46,
+    "command": "kubectl --context test-cluster -n test-namespace get deployment api-proxy-test -o 'jsonpath={.spec.replicas}{\"\\n\"}{range .spec.template.spec.containers[*]}{.name}{\" \"}{.image}{\" \"}{.imagePullPolicy}{\"\\n\"}{end}'"
+  },
+  {
+    "sample": 47,
+    "command": "coffer run --global --ns=test-scope kubectl --context test-cluster --namespace=test-namespace get pods -l app=inference-proxy-test -o jsonpath='{range .items[*]}{.metadata.name}{\" phase=\"}{.status.phase}{\" deleting=\"}{.metadata.deletionTimestamp}{\"\\n\"}{range .status.containerStatuses[*]}{.name}{\" ready=\"}{.ready}{\" restarts=\"}{.restartCount}{\" imageID=\"}{.imageID}{\"\\n\"}{end}{end}'"
+  },
+  {
+    "sample": 49,
+    "command": "coffer check --global --ns=test-scope --json"
+  },
+  {
+    "sample": 50,
+    "command": "code docs/superpowers/specs/2026-09-22-watcher-runner-design.md"
+  }
+]

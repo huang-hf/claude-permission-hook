@@ -68,7 +68,7 @@ tool call
 
    ```bash
    mkdir -p ~/.claude/hooks
-   cp secure_handler.py ~/.claude/hooks/
+   cp secure_handler.py scoped_policy.py ~/.claude/hooks/
    chmod +x ~/.claude/hooks/secure_handler.py
    ```
 
@@ -136,9 +136,41 @@ path such as `~/.codex/logs/permission_audit.jsonl` (expand `~` in the shell).
 For Codex, audit `decision=ask` means the judge deferred; it does not prove a prompt
 was displayed. Keep audit files out of version control.
 
-To maintain a single policy, edit this repository's `secure_handler.py`, run
+To maintain a single policy, edit this repository's `secure_handler.py` / `scoped_policy.py`, run
 `python3.12 -m unittest discover -s tests -q`, then copy it to the shared installed
-path above. There is no second copy of the policy to maintain for Codex.
+path above (copy both Python files). There is no second copy of the policy to maintain for Codex.
+
+### Scoped allowances
+
+Copy `scoped_policy.json.template` to `~/.claude/hooks/scoped_policy.json` and fill
+in your approved scopes. Its empty defaults enable nothing. Override the location
+with `SECURE_HANDLER_POLICY_PATH` if needed. Both clients read the same file on
+each invocation. Keep this personal configuration out of Git.
+
+| Setting | Scope |
+|---|---|
+| `trusted_roots` | Absolute project directories (or `~/...`), including their descendants. Required for every new allowance. |
+| `python_executables` | Exact interpreter names/paths allowed for `-m unittest` and loopback-only `-m http.server`. |
+| `http_read_endpoints` | HTTPS GET/HEAD endpoints. A trailing `/` allows that path subtree; otherwise the URL path must match exactly. Downloads can write only to `/tmp`. |
+| `clone_sources` | Exact Git clone URLs; an explicit destination inside cwd is required. |
+| `kube_contexts` | Explicit contexts allowed for selected non-secret `get` resources and `rollout status`. |
+| `coffer_namespaces` | Namespaces allowed for `coffer check --global --json` and `coffer run --global` wrapping only scoped kubectl/ECR reads. |
+| `aws_regions`, `ecr_repositories` | Regions and repositories for the wrapped `aws ecr describe-images` call. |
+
+Within trusted directories this also allows ordinary `git add`/`git commit -m`,
+`lark-cli docs +fetch`, and `code` opening local paths. Git hooks and unittest
+execute code belonging to the trusted project. Configure project roots accordingly.
+Git push/merge/amend, deployment restarts, secret reads, document writes, arbitrary
+Python/shell scripts, uploads, unknown options and dynamic shell expansions do not
+receive these new allowances. Existing dippy and AI behavior still applies to
+operations outside this module's scope.
+
+Every command in a supported compound expression must pass its own argument
+checks. Redirects are restricted to temporary files. Explicit dippy ask/deny rules
+retain precedence. A fully recognized readonly kubectl call bypasses the old
+infrastructure keyword check so a resource name containing `proxy` no longer
+causes a false positive. Only recognized scoped coffer calls bypass the blanket
+`coffer` keyword check; other credential and destructive redlines remain active.
 
 ## Config
 

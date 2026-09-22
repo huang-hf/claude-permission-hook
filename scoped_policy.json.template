@@ -1,0 +1,10 @@
+{
+  "trusted_roots": [],
+  "python_executables": [],
+  "http_read_endpoints": [],
+  "clone_sources": [],
+  "kube_contexts": [],
+  "coffer_namespaces": [],
+  "aws_regions": [],
+  "ecr_repositories": []
+}
