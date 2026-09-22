@@ -15,6 +15,8 @@ anything risky — and it logs every decision for auditing.
   just blind-trusts a command.
 - **Fail-safe by design.** Any error, missing token, or unhandled case falls back to Claude's
   normal permission prompt. It never *reduces* safety on failure.
+- **Jev / TypeSafe support.** Use `jev-latest` via TypeSafe's System One API for
+  structured risk scores, as an alternative to the Haiku/OpenAI-compatible fallback.
 - **Full audit trail.** Every decision is appended to `~/.claude/logs/permission_audit.jsonl`.
 - **No hardcoded secrets.** Token and API base come from env vars; nothing sensitive in the repo.
 
@@ -38,7 +40,7 @@ What it doesn't explicitly allow falls through to your normal mode.
 | Tool | Behavior |
 |---|---|
 | `Read` / `Write` / `Edit` / `NotebookEdit` | Allow when the path is inside the current working directory, or inside the current repo's `.git` metadata (e.g. worktree coordination files). `.git/hooks/` and `.git/config` always prompt (they can execute code). |
-| `Bash` | 1. **dippy AST analysis** — local, fast, offline. `allow` → runs with no prompt. <br> 2. **AI fallback** — if dippy defers (or isn't installed), a small model (Haiku) judges the command `SAFE` / `UNSAFE`. `SAFE` → allow, `UNSAFE` → prompt. |
+| `Bash` | 1. **dippy AST analysis** — local, fast, offline. `allow` → runs with no prompt. <br> 2. **AI fallback** — if dippy defers (or isn't installed), the selected backend judges the command: Haiku/OpenAI-compatible `SAFE` / `UNSAFE`, or [Jev / TypeSafe risk scores](#jev--typesafe-backend). Only an approving result allows it. |
 | Anything else | Silent exit → Claude's normal prompt. |
 
 ### Decision flow
@@ -52,8 +54,9 @@ tool call
    ├─ Bash ── dippy AST ── allow → run + audit
    │              │ ask/deny
    │              ▼
-   │         AI fallback (Haiku) ── SAFE → allow + audit
-   │                                UNSAFE → prompt + audit
+   │         Selected remote backend
+   │              ├─ Haiku / OpenAI-compatible: SAFE → allow; otherwise prompt
+   │              └─ Jev / TypeSafe: all risk scores below threshold → allow; otherwise prompt
    │
    └─ error / no token / unknown tool ── silent exit → normal prompt (fail-safe)
 ```
@@ -268,7 +271,7 @@ other redirects, and the script's redlines still undergo their existing checks.
 |---|---|---|
 | `ANTHROPIC_AUTH_TOKEN` | — | Token for the AI fallback call. No token → AI fallback is skipped. |
 | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | API base (supports a proxy). |
-| `SECURE_HANDLER_AI_FALLBACK` | `1` | `0` disables the AI layer (dippy-only). |
+| `SECURE_HANDLER_AI_FALLBACK` | `1` | `0` disables only the Haiku/OpenAI-compatible fallback; does not disable TypeSafe. |
 | `SECURE_HANDLER_AI_API` | `anthropic` | API format for the AI fallback: `anthropic` (Messages API) or `openai` (chat completions — works with OpenAI-compatible gateways/proxies). |
 | `SECURE_HANDLER_AI_MODEL` | `claude-haiku-4-5-20251001` | Model used by the AI fallback. |
 | `SECURE_HANDLER_INSECURE_TLS` | — | Set to `1` to skip TLS certificate verification (only for local MITM proxies). Off by default — certificates are verified. |
@@ -292,7 +295,7 @@ No. Anything dippy or the AI layer flags as unsafe prompts first. And if the who
 machinery fails, it falls back to prompting — never to auto-allowing.
 
 **Q: Do I need the AI fallback?**
-No. Set `SECURE_HANDLER_AI_FALLBACK=0` to run dippy-only. You'll get fewer auto-allows but
+No. Set `SECURE_HANDLER_BACKEND=off` to disable remote judgment. You'll get fewer auto-allows but
 zero network calls and no token needed.
 
 **Q: Can I use it with an OpenAI-compatible gateway?**
@@ -302,11 +305,52 @@ Yes. Set `SECURE_HANDLER_AI_API=openai` and point `ANTHROPIC_BASE_URL` at your g
 Yes. Relative paths are resolved against the hook's JSON `cwd`, and `.git` metadata files
 used by worktrees are handled explicitly.
 
-## License
+## Jev / TypeSafe backend
 
-MIT — see [LICENSE](LICENSE).
+**Jev is supported through TypeSafe's System One API**, for both Claude Code and
+Codex. The default model is `jev-latest`. This backend returns structured risk
+scores instead of the `SAFE` / `UNSAFE` text used by the other AI backend.
+The two backends are alternatives: a TypeSafe error or non-approving score does
+not fall back to Haiku or another gateway.
 
-## TypeSafe risk policy
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `SECURE_HANDLER_BACKEND` | `anthropic` | Set to `typesafe` for Jev, or `off` for no remote judgment. |
+| `SECURE_HANDLER_TYPESAFE_KEY` | — | TypeSafe API key, injected into the hook process. |
+| `SECURE_HANDLER_TYPESAFE_URL` | `https://api.typesafe.ai/v1/systemone` | Full System One endpoint URL. |
+| `SECURE_HANDLER_TYPESAFE_MODEL` | `jev-latest` | Jev model identifier. |
+| `SECURE_HANDLER_TYPESAFE_TIMEOUT` | `6` | Request timeout in seconds. |
+| `SECURE_HANDLER_THRESHOLD` | `0.2` | Shared threshold for the three risks below. |
+
+### Coffer setup for Codex
+
+Store the key interactively (skip this if it already exists):
+
+```bash
+coffer secret add SECURE_HANDLER_TYPESAFE_KEY --global --ns=default
+```
+
+In `~/.codex/hooks.json`, use the following `command` for the existing
+`PermissionRequest` hook. Replace the executable placeholders with absolute
+paths from your installation; retain its matcher, timeout, and other hooks:
+
+```json
+{
+  "command": "<COFFER> run --global --ns=default /usr/bin/env SECURE_HANDLER_BACKEND=typesafe SECURE_HANDLER_TYPESAFE_URL=https://api.typesafe.ai/v1/systemone <PYTHON_WITH_DIPPY> \"$HOME/.claude/hooks/secure_handler.py\" --agent codex"
+}
+```
+
+Coffer injects the key at invocation time; the hook configuration contains no
+secret value. Use `--ns` matching where you stored the key. After changing the
+hook command, restart Codex and review/trust it in `/hooks`; modified hooks are
+skipped until trusted. For Claude, the same environment variables select Jev;
+keep the Claude entry point without `--agent codex`.
+
+Audit entries with `layer: "typesafe"`, `backend: "typesafe"`, `scores`, and
+`elapsed_ms` show the result. `typesafe_no_key` means no key reached the hook;
+`typesafe_neterror:*` means a request failed. Neither is an AI risk judgment.
+
+### TypeSafe risk policy
 
 With `SECURE_HANDLER_BACKEND=typesafe`, the hook asks only three questions:
 
@@ -321,3 +365,7 @@ of the project and data exfiltration are no longer TypeSafe scoring questions.
 Unexpected extra answers are ignored; missing or invalid required scores still
 require approval. Core local redlines remain in effect before remote judgment.
 `SECURE_HANDLER_THRESHOLD` can override the shared threshold (default `0.2`).
+
+## License
+
+MIT — see [LICENSE](LICENSE).
