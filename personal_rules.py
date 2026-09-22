@@ -205,7 +205,7 @@ def _command(words, cwd, policy):
     tool, args = words[0], words[1:]
     if tool == 'curl':
         return _curl(args, policy)
-    if tool == 'lark-cli':
+    if tool in ('lark-cli', 'gh'):
         return True
     if tool == 'kubectl':
         return _kubectl(args, policy)
@@ -222,7 +222,7 @@ def _command(words, cwd, policy):
 
 
 def approved_programs(command: str, cwd: str) -> set[str] | None:
-    """Approve static lark-cli commands globally; other programs require scopes."""
+    """Approve static lark-cli/gh commands globally; other programs require scopes."""
     try:
         from dippy.vendor.parable import parse
         # Global personal allowances do not require project scope data.
@@ -256,7 +256,7 @@ def approved_programs(command: str, cwd: str) -> set[str] | None:
             if kind != 'command':
                 return None
             words = [_literal(word) for word in node.words]
-            if not words or (words[0] != 'lark-cli' and not trusted):
+            if not words or (words[0] not in ('lark-cli', 'gh') and not trusted):
                 return None
             if not _command(words, directory, policy):
                 return None

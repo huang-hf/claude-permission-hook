@@ -109,6 +109,41 @@ class ScopedPolicyTest(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 self.assertIsNone(personal_rules.approved_programs(cmd, self.cwd))
 
+    def test_all_gh_subcommands_without_project_scope_or_json(self):
+        commands = [
+            'gh pr view 773 --repo protagolabs/gradio_inference_platform --json state,mergedAt,mergeCommit,baseRefName',
+            'gh pr create --title example --body example',
+            'gh pr merge 773 --squash',
+            'gh issue comment 1 --body example',
+            'gh run rerun 35693826266',
+            'gh workflow run build.yml',
+            'gh api repos/example/repo/issues -X POST -f title=example',
+            'gh repo delete example/repo --yes',
+            'gh auth login', 'gh future-command --new-option value',
+            'gh run view 35693826266 --log > /tmp/gh-result.log',
+        ]
+        for config in ('{}', '{invalid', None):
+            if config is None:
+                self.config_path.unlink()
+            else:
+                self.config_path.write_text(config)
+            for cmd in commands:
+                with self.subTest(config=config, cmd=cmd):
+                    self.assertEqual(self.judge(cmd, '/untrusted').decision, 'allow')
+
+    def test_gh_does_not_approve_other_executables_or_shell_expansions(self):
+        import personal_rules
+        for cmd in (
+            'gh pr list; unknown-command',
+            'gh pr list && git push origin main',
+            'gh api repos/example/repo | sh',
+            'gh issue create --body "$(touch /tmp/gh-test)"',
+            'gh pr list > /etc/gh-result',
+            '/tmp/gh pr list', 'gh-fake pr list',
+        ):
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(personal_rules.approved_programs(cmd, self.cwd))
+
     def test_untrusted_project_never_gets_new_allowance(self):
         self.assertNotEqual(self.judge('git add a', '/untrusted').decision, 'allow')
 

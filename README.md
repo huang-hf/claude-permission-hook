@@ -205,13 +205,18 @@ to preserve your customized `personal_rules.py` and JSON data. Back up and merge
 personal-rule changes when intentionally updating that file. Hooks load the files
 on each invocation, so both clients use the same current personal rules.
 
-### Global personal allowance: lark-cli
+### Global personal allowances: lark-cli and gh
 
 The supplied personal rules allow **all `lark-cli` subcommands**, including reads,
 creates, updates, deletes, authentication, and future subcommands. This applies
 in any working directory and does not require `scoped_policy.json`.
 
-The executable must be the literal `lark-cli` command. The entire shell command
+All GitHub CLI **`gh` subcommands** are also allowed, including PR creation and
+merging, issue comments, Actions triggers/reruns, repository deletion,
+authentication, and `gh api` reads/writes. This also applies in any directory
+without scope JSON. Git commands retain their existing separate rules.
+
+The executable must be the literal `lark-cli` or `gh` command. The entire shell command
 is still checked: extra programs need their own approval, shell substitutions
 are not covered, and output redirects retain the existing temporary-path checks.
 Core redlines and explicit dippy ask/deny rules still apply. This rule changes
@@ -226,7 +231,7 @@ each invocation. Keep this personal configuration out of Git.
 
 | Setting | Scope |
 |---|---|
-| `trusted_roots` | Absolute project directories (or `~/...`), including their descendants. Required for project-scoped allowances; `lark-cli` is independent of this setting. |
+| `trusted_roots` | Absolute project directories (or `~/...`), including their descendants. Required for project-scoped allowances; `lark-cli` and `gh` are independent of this setting. |
 | `python_executables` | Exact interpreter names/paths allowed for `-m unittest` and loopback-only `-m http.server`. |
 | `http_read_endpoints` | HTTPS GET/HEAD endpoints. A trailing `/` allows that path subtree; otherwise the URL path must match exactly. Downloads can write only to `/tmp`. |
 | `clone_sources` | Exact Git clone URLs; an explicit destination inside cwd is required. |
