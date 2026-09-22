@@ -306,4 +306,3 @@ def redirect_rules(command: str):
         if resolved != root and resolved.is_relative_to(root):
             rules.append(Rule('allow', target, source='secure_handler:tmp_redirect'))
     return rules
-
