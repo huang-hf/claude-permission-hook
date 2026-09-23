@@ -179,7 +179,7 @@ The personal file exposes just two entry points:
   an empty list to add no redirect allowances.
 
 The supplied implementation dispatches command checks in `_command()`. For example,
-to allow one exact invocation of your own CLI within configured trusted directories,
+to allow one exact invocation of your own CLI within the current working directory,
 add this branch there:
 
 ```python
@@ -228,13 +228,12 @@ approval decisions; it does not execute Lark operations itself.
 ### Scoped allowances
 
 Copy `scoped_policy.json.template` to `~/.claude/hooks/scoped_policy.json` and fill
-in your approved scopes. Its empty defaults enable no project-scoped allowances. Override the location
+in your approved scopes. Its empty defaults enable no configured HTTP/infrastructure/clone scopes. Override the location
 with `SECURE_HANDLER_POLICY_PATH` if needed. Both clients read the same file on
 each invocation. Keep this personal configuration out of Git.
 
 | Setting | Scope |
 |---|---|
-| `trusted_roots` | Absolute project directories (or `~/...`), including their descendants. Required for project-scoped allowances; `lark-cli` and `gh` are independent of this setting. |
 | `python_executables` | Exact interpreter names/paths allowed for `-m unittest` and loopback-only `-m http.server`. |
 | `http_read_endpoints` | HTTPS GET/HEAD endpoints. A trailing `/` allows that path subtree; otherwise the URL path must match exactly. Downloads can write only to `/tmp`. |
 | `clone_sources` | Exact Git clone URLs; an explicit destination inside cwd is required. |
@@ -242,9 +241,16 @@ each invocation. Keep this personal configuration out of Git.
 | `coffer_namespaces` | Namespaces allowed for `coffer check --global --json` and `coffer run --global` wrapping only scoped kubectl/ECR reads. |
 | `aws_regions`, `ecr_repositories` | Regions and repositories for the wrapped `aws ecr describe-images` call. |
 
-Within trusted directories this also allows ordinary `git add`/`git commit -m`,
-and `code` opening local paths. Git hooks and unittest
-execute code belonging to the trusted project. Configure project roots accordingly.
+The hook event's absolute `cwd` is automatically the trusted directory for local
+rules, including its descendants. No project registration or `trusted_roots`
+list is required; legacy `trusted_roots` entries are ignored. This is the cwd
+provided with each approval request, not a fixed list or the core script directory.
+Ordinary `git add`/`git commit -m` and `code` opening local paths work even without
+scope JSON. Paths escaping cwd through `..` or symlinks still do not qualify.
+Trusting files does not approve arbitrary commands: operation checks, protected
+paths, core redlines, and explicit dippy restrictions remain. Python executables,
+HTTP endpoints, cluster contexts and clone sources still use their configured
+scopes. Git hooks and unittest can execute code belonging to the current project.
 Git push/merge/amend, deployment restarts, secret reads, document writes, arbitrary
 Python/shell scripts, uploads, unknown options and dynamic shell expansions do not
 receive these new allowances. Existing dippy and AI behavior still applies to

@@ -144,8 +144,15 @@ class ScopedPolicyTest(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 self.assertIsNone(personal_rules.approved_programs(cmd, self.cwd))
 
-    def test_untrusted_project_never_gets_new_allowance(self):
-        self.assertNotEqual(self.judge('git add a', '/untrusted').decision, 'allow')
+    def test_current_directory_is_trusted_without_registration(self):
+        with tempfile.TemporaryDirectory() as other:
+            cmd = 'git add docs/plan.md && git commit -m "docs: plan"'
+            self.assertEqual(self.judge(cmd, other).decision, 'allow')
+
+    def test_invalid_cwd_does_not_use_process_directory(self):
+        import personal_rules
+        for cwd in ('', '.', 'relative/project'):
+            self.assertIsNone(personal_rules.approved_programs('git add a', cwd))
 
     def test_explicit_dippy_deny_still_wins(self):
         from dippy.core.config import Config, Rule
@@ -162,17 +169,20 @@ class ScopedPolicyTest(unittest.TestCase):
         for suffix in ('; rm -rf /tmp/x', '; kubectl --context test-cluster delete pods x'):
             self.assertIsNotNone(sh.check_redlines(sh.Request('command', cmd + suffix, self.cwd)))
 
-    def test_bad_or_missing_policy_falls_back(self):
+    def test_bad_or_missing_policy_preserves_local_rules_only(self):
+        import personal_rules
         self.config_path.write_text('{invalid')
-        self.assertNotEqual(self.judge('git add a').decision, 'allow')
+        self.assertEqual(self.judge('git add a').decision, 'allow')
+        self.assertIsNone(personal_rules.approved_programs('curl https://docs.example.com/codex/', self.cwd))
         self.config_path.unlink()
-        self.assertNotEqual(self.judge('git add a').decision, 'allow')
+        self.assertEqual(self.judge('git add a').decision, 'allow')
+        self.assertIsNone(personal_rules.approved_programs('curl https://docs.example.com/codex/', self.cwd))
 
-    def test_malformed_roots_cannot_broaden_trust(self):
-        self.policy['trusted_roots'] = self.cwd
+    def test_legacy_roots_do_not_expand_current_directory(self):
+        self.policy['trusted_roots'] = [self.tmp.name]
         self.config_path.write_text(json.dumps(self.policy))
         import personal_rules
-        self.assertIsNone(personal_rules.approved_programs('git add a', '/untrusted'))
+        self.assertIsNone(personal_rules.approved_programs('git add ../outside', self.cwd))
 
     def test_symlinks_do_not_escape_scoped_file_operations(self):
         import personal_rules

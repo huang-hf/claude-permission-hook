@@ -222,24 +222,22 @@ def _command(words, cwd, policy):
 
 
 def approved_programs(command: str, cwd: str) -> set[str] | None:
-    """Approve static lark-cli/gh commands globally; other programs require scopes."""
+    """Trust the event cwd for local actions; remote scopes remain configurable."""
     try:
         from dippy.vendor.parable import parse
         # Global personal allowances do not require project scope data.
         policy = {}
-        trusted = False
+        trusted = bool(cwd) and Path(cwd).is_absolute()
         directory = Path(cwd).resolve()
         try:
             config = Path(os.getenv('SECURE_HANDLER_POLICY_PATH') or Path(__file__).with_name('scoped_policy.json'))
             candidate = json.loads(config.read_text())
+            if isinstance(candidate, dict):
+                candidate.pop('trusted_roots', None)  # Legacy setting; cwd is the boundary.
             if not isinstance(candidate, dict) or any(
                     not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value)
                     for value in candidate.values()):
                 raise ValueError('invalid scope data')
-            roots = [Path(root).expanduser() for root in candidate.get('trusted_roots', [])]
-            if any(not root.is_absolute() for root in roots):
-                raise ValueError('relative trusted root')
-            trusted = Path(cwd).is_absolute() and any(directory.is_relative_to(root.resolve()) for root in roots)
             policy = candidate
         except (OSError, ValueError, TypeError):
             pass
